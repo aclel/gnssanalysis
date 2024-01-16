@@ -25,6 +25,7 @@ import pandas as _pd
 from boto3.s3.transfer import TransferConfig
 
 from .gn_datetime import dt2gpswk, gpsweekD, gpswkD2dt
+from .filenames import generate_IGS_long_filename, generate_content_type, generate_sampling_rate
 
 MB = 1024 * 1024
 
@@ -169,7 +170,49 @@ def gen_uncomp_filename(comp_filename: str) -> str:
         return comp_filename
 
 
-def gen_prod_filename(dt, pref, suff, f_type, wkly_file=False, repro3=False):
+def long_filename_cddis_cutoff(epoch: _datetime.date) -> bool:
+    """
+    Simple function that determines whether long filenames should be expected on the CDDIS server.
+    """
+    long_filename_cutoff = _datetime.date(2022, 11, 27)
+    if epoch >= long_filename_cutoff:
+        return True
+    else:
+        return False
+
+
+def gen_prod_filename(
+    dt: _datetime.datetime, pref: str, suff, f_type, wkly_file=False, repro3=False, solution_type="FIN"
+):
+    gpswk, gpswkD = dt2gpswk(dt, both=True)
+
+    sampling_rate = generate_sampling_rate(f_type, pref, solution_type)
+
+    if not long_filename_cddis_cutoff(dt):
+        filename = gen_prod_filename_legacy(dt, pref, suff, f_type, wkly_file, repro3)
+    else:
+        if wkly_file:
+            timespan = _datetime.timedelta(days=7)
+        else:
+            timespan = _datetime.timedelta(days=1)
+
+        content_type = generate_content_type(f_type, pref)
+
+        filename = generate_IGS_long_filename(
+            analysis_center=pref.upper(),
+            content_type=content_type,
+            format_type=f_type.upper(),
+            start_epoch=dt,
+            timespan=timespan,
+            solution_type=solution_type,
+            sampling_rate=sampling_rate,
+            project="OPS",
+        )
+
+    return filename + ".gz", gpswk
+
+
+def gen_prod_filename_legacy(dt, pref, suff, f_type, wkly_file=False, repro3=False):
     """
     Generate a product filename based on the inputs
     """
@@ -272,13 +315,12 @@ def check_n_download_url(url, dwndir, filename=False):
 def check_n_download(comp_filename, dwndir, ftps, uncomp=True, remove_crx=False, no_check=False):
     """Download compressed file to dwndir if not already present and optionally uncompress"""
 
-    comp_file = _Path(dwndir + comp_filename)
-
     if dwndir[-1] != "/":
         dwndir += "/"
 
-    if no_check or (not check_file_present(comp_filename, dwndir)):
+    comp_file = _Path(dwndir + comp_filename)
 
+    if no_check or (not check_file_present(comp_filename, dwndir)):
         logging.debug(f"Downloading {comp_filename}")
 
         with open(comp_file, "wb") as local_f:
@@ -504,9 +546,7 @@ def download_prod(
 
     for dt in dt_list:
         for f_typ in f_types:
-
             if dwn_src == "cddis":
-
                 if repro3:
                     f, gpswk = gen_prod_filename(dt, pref=ac, suff=suff, f_type=f_typ, repro3=True)
                 elif (ac == "igs") and (f_typ == "erp"):
@@ -723,7 +763,6 @@ def download_rinex3(dates, stations, dest, dwn_src="cddis", ftps=False, f_dict=F
 
             for dt in dt_list:
                 for station in stations:
-
                     f_pref = f"{station}_R_"
                     f_suff_crx = f"0000_01D_30S_MO.crx.gz"
                     f = f_pref + dt.strftime("%Y%j") + f_suff_crx

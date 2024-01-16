@@ -251,11 +251,11 @@ def generate_IGS_long_filename(
 
     if isinstance(timespan, str):
         timespan_str = timespan
-    else: 
+    else:
         if end_epoch is None:
             if timespan is None:
                 raise ValueError("Either end_epoch or timespan must be supplied")
-        else :
+        else:
             timespan = end_epoch - start_epoch
         timespan_str = nominal_span_string(timespan.total_seconds())
 
@@ -266,6 +266,86 @@ def generate_IGS_long_filename(
         f"{content_type}.{format_type}"
     )
     return result
+
+
+# Taken from auto_download_PPP.py
+def generate_content_type(file_ext: str, analysis_center: str) -> str:
+    """
+    IGS files following the long filename convention require a content specifier
+    Given the file extension, generate the content specifier
+    """
+    file_ext = file_ext.upper()
+    file_ext_dict = {
+        "ERP": "ERP",
+        "SP3": "ORB",
+        "CLK": "CLK",
+        "OBX": "ATT",
+        "TRO": "TRO",
+        "SNX": "CRD",
+        "BIA": {"ESA": "BIA", None: "OSB"},
+    }
+    content_type = file_ext_dict.get(file_ext)
+    # If result is still dictionary, use analysis_center to determine content_type
+    if isinstance(content_type, dict):
+        content_type = content_type.get(analysis_center, content_type.get(None))
+    return content_type
+
+
+# Taken from auto_download_PPP.py
+def generate_sampling_rate(file_ext: str, analysis_center: str, solution_type: str) -> str:
+    """
+    IGS files following the long filename convention require a content specifier
+    Given the file extension, generate the content specifier
+    """
+    file_ext = file_ext.upper()
+    analysis_center = analysis_center.upper()
+    solution_type = solution_type.upper()
+
+    # TODO: Need to handle more than just some IGS cases
+    sampling_rates = {
+        "ERP": {
+            ("COD"): {"FIN": "12H", "RAP": "01D", "ERP": "01D"},
+            ("IGS"): "01D",
+            (): "01D",
+        },
+        "BIA": "01D",
+        "SP3": {
+            # ("COD", "GFZ", "GRG", "IAC", "JAX", "MIT", "WUM"): "05M",
+            # ("ESA"): {"FIN": "05M", "RAP": "15M", None: "15M"},
+            ("IGS"): "15M",
+            (): "15M",
+        },
+        "CLK": {
+            # ("EMR", "MIT", "SHA", "USN"): "05M",
+            # ("ESA", "GFZ", "GRG"): {"FIN": "30S", "RAP": "05M", None: "30S"},
+            ("IGS"): {"FIN": "05M"},
+            (): "30S",
+        },
+        "OBX": {"GRG": "05M", None: "30S"},
+        "TRO": {"JPL": "30S", None: "01H"},
+        "SNX": "01D",
+    }
+    if file_ext in sampling_rates:
+        file_rates = sampling_rates[file_ext]
+        if isinstance(file_rates, dict):
+            center_rates_found = False
+            for key in file_rates:
+                if analysis_center in key:
+                    center_rates = file_rates.get(key, file_rates.get(()))
+                    center_rates_found = True
+                    break
+                # else:
+                #     return file_rates.get(())
+            if not center_rates_found:  # DZ: bug fix
+                return file_rates.get(())
+            if isinstance(center_rates, dict):
+                return center_rates.get(solution_type, center_rates.get(None))
+            else:
+                return center_rates
+        else:
+            return file_rates
+    else:
+        return "01D"
 
 
 def generate_IGS_nominal_span(start_epoch: datetime.datetime, end_epoch: datetime.datetime) -> str:
@@ -403,7 +483,7 @@ def determine_clk_name_props(file_path: pathlib.Path) -> Dict[str, Any]:
         #     clk_df.reset_index("J2000").groupby(level="CODE")["J2000"].diff().groupby(level="CODE").median().median()
         # )
         # The pandas stubs seem to assume .index returns an Index (not MultiIndex), so we need to ignore the typing for now
-        sampling_rate = np.median(np.diff(clk_df.index.levels[1])) #type: ignore
+        sampling_rate = np.median(np.diff(clk_df.index.levels[1]))  # type: ignore
         # Alternatively:
         sampling_rate = np.median(np.diff(clk_df.index.get_level_values("J2000").unique()))
         end_epoch = gn_datetime.j2000_to_pydatetime(end_j2000sec + sampling_rate)
@@ -606,7 +686,7 @@ def determine_sp3_name_props(file_path: pathlib.Path) -> Dict[str, Any]:
         #     sp3_df.reset_index(0, names="Epoch").groupby(level=0)["Epoch"].diff().groupby(level=0).median().median()
         # )
         # The pandas stubs seem to assume .index returns an Index (not MultiIndex), so we need to ignore the typing for now
-        sampling_rate = np.median(np.diff(sp3_df.index.levels[0])) # type: ignore
+        sampling_rate = np.median(np.diff(sp3_df.index.levels[0]))  # type: ignore
         # Alternatively:
         # sampling_rate = np.median(np.diff(sp3_df.index.get_level_values(0).unique()))
         name_props["start_epoch"] = start_epoch
