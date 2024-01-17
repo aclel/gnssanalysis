@@ -201,15 +201,18 @@ def gen_prod_filename(dt: _datetime.date, pref: str, suff, f_type, wkly_file=Fal
 
         content_type = generate_content_type(f_type, pref)
 
-        filename = generate_IGS_long_filename(
-            analysis_center=pref.upper(),
-            content_type=content_type,
-            format_type=f_type.upper(),
-            start_epoch=dt,
-            timespan=timespan,
-            solution_type=solution_type,
-            sampling_rate=sampling_rate,
-            project="OPS",
+        filename = (
+            generate_IGS_long_filename(
+                analysis_center=pref.upper(),
+                content_type=content_type,
+                format_type=f_type.upper(),
+                start_epoch=dt,
+                timespan=timespan,
+                solution_type=solution_type,
+                sampling_rate=sampling_rate,
+                project="OPS",
+            )
+            + ".gz"
         )
 
     return filename, gpswk
