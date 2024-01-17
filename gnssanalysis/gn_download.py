@@ -181,9 +181,7 @@ def long_filename_cddis_cutoff(epoch: _datetime.date) -> bool:
         return False
 
 
-def gen_prod_filename(
-    dt: _datetime.datetime, pref: str, suff, f_type, wkly_file=False, repro3=False, solution_type="FIN"
-):
+def gen_prod_filename(dt: _datetime.date, pref: str, suff, f_type, wkly_file=False, repro3=False, solution_type="FIN"):
     gpswk, gpswkD = dt2gpswk(dt, both=True)
 
     sampling_rate = generate_sampling_rate(f_type, pref, solution_type)
@@ -193,6 +191,11 @@ def gen_prod_filename(
     else:
         if wkly_file:
             timespan = _datetime.timedelta(days=7)
+
+            def _first_day_of_week(date: _datetime.date):
+                return date + _datetime.timedelta(days=-(date.weekday() + 1))
+
+            dt = _first_day_of_week(dt)
         else:
             timespan = _datetime.timedelta(days=1)
 
@@ -209,7 +212,7 @@ def gen_prod_filename(
             project="OPS",
         )
 
-    return filename + ".gz", gpswk
+    return filename, gpswk
 
 
 def gen_prod_filename_legacy(dt, pref, suff, f_type, wkly_file=False, repro3=False):
