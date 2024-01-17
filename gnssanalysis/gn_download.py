@@ -13,6 +13,7 @@ import subprocess as _subprocess
 import sys as _sys
 import threading
 import time as _time
+from contextlib import contextmanager
 from ftplib import FTP_TLS as _FTP_TLS
 from pathlib import Path as _Path
 from typing import Optional as _Optional, Union as _Union
@@ -28,6 +29,8 @@ from .gn_datetime import dt2gpswk, gpsweekD, gpswkD2dt
 from .filenames import generate_IGS_long_filename, generate_content_type, generate_sampling_rate
 
 MB = 1024 * 1024
+
+CDDIS_FTP = "gdc.cddis.eosdis.nasa.gov"
 
 # s3client = boto3.client('s3', region_name='eu-central-1')
 
@@ -387,6 +390,7 @@ def get_install_crx2rnx(override=False, verbose=False):
             logging.info(f"crx2rnx already present in {_sys.path[0]}")
 
 
+# TODO: Should this be deprecated in favour of ftp_tls context manager?
 def connect_cddis(verbose=False):
     """
     Output an FTP_TLS object connected to the cddis server root
@@ -394,7 +398,7 @@ def connect_cddis(verbose=False):
     if verbose:
         logging.info("\nConnecting to CDDIS server...")
 
-    ftps = _FTP_TLS("gdc.cddis.eosdis.nasa.gov")
+    ftps = _FTP_TLS(CDDIS_FTP)
     ftps.login()
     ftps.prot_p()
 
@@ -402,6 +406,22 @@ def connect_cddis(verbose=False):
         logging.info("Connected.")
 
     return ftps
+
+
+@contextmanager
+def ftp_tls(url: str, **kwargs) -> None:
+    kwargs.setdefault("timeout", 30)
+    with _FTP_TLS(url, **kwargs) as ftps:
+        ftps.login()
+        ftps.prot_p()
+        yield ftps
+        ftps.quit()
+
+
+@contextmanager
+def ftp_tls_cddis(**kwargs) -> None:
+    with ftp_tls(CDDIS_FTP, **kwargs) as ftps:
+        yield ftps
 
 
 def select_mr_file(mr_files, f_typ, ac):
