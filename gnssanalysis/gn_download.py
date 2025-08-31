@@ -30,7 +30,7 @@ from ftplib import FTP_TLS as _FTP_TLS
 from pathlib import Path as _Path
 from typing import Any, Generator, List, Literal, Optional, Tuple, Union
 from urllib import request as _request
-from urllib.error import HTTPError as _HTTPError
+from urllib.error import HTTPError as _HTTPError, URLError as _URLError
 import requests as _requests
 import warnings as _warnings
 
@@ -45,6 +45,7 @@ from .gn_utils import ensure_folders
 MB = 1024 * 1024
 
 CDDIS_FTP = "gdc.cddis.eosdis.nasa.gov"
+CDDIS_URL = "https://cddis.nasa.gov/archive"
 PRODUCT_BASE_URL = "https://peanpod.s3.ap-southeast-2.amazonaws.com/aux/products/"
 IGS_FILES_URL = "https://files.igs.org/pub/"
 BERN_URL = "http://ftp.aiub.unibe.ch/"
@@ -745,10 +746,24 @@ def download_file_from_cddis(
     note_filetype: str = None,
 ) -> Union[_Path, None]:
     """
-    Downloads a single file from the CDDIS HTTPS archive.
+    Download a single file from the CDDIS HTTPS archive.
+
+    :param str filename: Name of the file to download.
+    :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
+    :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
+    :param _Path output_folder: Local folder to store the output file.
+    :param int max_retries: Number of retries before raising error, defaults to 3.
+    :param bool decompress: If True, decompresses the file after download (e.g. .Z, .gz), defaults to True.
+    :param str if_file_present: What to do if file already present:
+        - "replace": overwrite
+        - "dont_replace": skip
+        - "prompt_user": interactively ask user, defaults to "prompt_user".
+    :param str note_filetype: Label for log/STDOUT messages, defaults to None.
+    :raises URLError, HTTPError, OSError: If the file cannot be downloaded after retries.
+    :return _Path or None: The pathlib.Path of the downloaded file (or decompressed output of it).
+                          Returns None if the file already existed and was skipped.
     """
 
-    # Handle deprecated argument
     if ftp_folder and url_folder:
         raise ValueError("Use either 'ftp_folder' or 'url_folder', not both.")
     folder = url_folder or ftp_folder
@@ -759,9 +774,7 @@ def download_file_from_cddis(
             stacklevel=2,
         )
 
-    # Build full URL
-    base_url = "https://cddis.nasa.gov/archive"
-    url = f"{base_url}/{folder}/{filename}"
+    url = f"{CDDIS_URL}/{folder}/{filename}"
 
     output_folder.mkdir(parents=True, exist_ok=True)
     local_path = output_folder / filename
@@ -781,15 +794,14 @@ def download_file_from_cddis(
     while retries <= max_retries:
         try:
             logging.info(f"Downloading {note_filetype or filename} from {url}")
-            with _requests.get(url, stream=True) as r:
-                if r.status_code == 401:
+            with _request.urlopen(url) as response:
+                if response.status == 401:
                     logging.error("Unauthorized (401). Did you set up .netrc with Earthdata login?")
                     return None
-                r.raise_for_status()
+                if response.status != 200:
+                    raise _HTTPError(url, response.status, "Bad status", hdrs=None, fp=None)
                 with open(local_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                    shutil.copyfileobj(response, f)
 
             logging.info(f"Downloaded {filename}")
 
@@ -799,7 +811,7 @@ def download_file_from_cddis(
 
             return local_path
 
-        except _requests.RequestException as e:
+        except (_HTTPError, _URLError, OSError) as e:
             retries += 1
             if retries > max_retries:
                 logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
@@ -807,7 +819,8 @@ def download_file_from_cddis(
                     local_path.unlink()
                 raise
             backoff = _random.uniform(0.0, 2.0 ** retries)
-            logging.warning(f"Error downloading {filename}: {e} (retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
+            logging.warning(f"Error downloading {filename}: {e} "
+                            f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
             _time.sleep(backoff)
 
     raise Exception("Unexpected fallthrough in download_file_from_cddis.")
@@ -820,8 +833,16 @@ def download_multiple_files_from_cddis(
     output_folder: _Path = _Path("."),
 ) -> None:
     """
-    Download multiple files from CDDIS HTTPS in a thread pool.
+    Download multiple files from the CDDIS HTTPS archive concurrently, using a thread pool.
+
+    :param List[str] files: List of filenames to download.
+    :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
+    :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
+    :param _Path output_folder: Local folder to store the output files.
+    :raises ValueError: If both ftp_folder and url_folder are provided.
+    :return None: Runs downloads in parallel, does not return values. Each file is handled independently.
     """
+
     if ftp_folder and url_folder:
         raise ValueError("Use either 'ftp_folder' or 'url_folder', not both.")
     folder = url_folder or ftp_folder
@@ -840,6 +861,7 @@ def download_multiple_files_from_cddis(
             _repeat(output_folder)
         ))
 
+
 def download_product_from_cddis(
     download_dir: _Path,
     start_epoch: _datetime.datetime,
@@ -856,7 +878,24 @@ def download_product_from_cddis(
     if_file_present: str = "prompt_user",
 ) -> List[_Path]:
     """
-    Download products from CDDIS HTTPS archive.
+    Download one or more product files from the CDDIS HTTPS archive, based on start and end epochs.
+
+    :param _Path download_dir: Where to download files (local directory).
+    :param _datetime.datetime start_epoch: Start date/time of files to download.
+    :param _datetime.datetime end_epoch: End date/time of files to download.
+    :param str file_ext: Extension of files to download (e.g. SP3, CLK, ERP, etc).
+    :param int limit: Limit the number of files to download. Defaults to None (no limit).
+    :param bool long_filename: Whether to use IGS long filename convention.
+                               If None, automatically determined from start_epoch.
+    :param str analysis_center: Analysis center to download from (e.g. COD, GFZ, IGS), defaults to "IGS".
+    :param str solution_type: Solution type to download (e.g. ULT, RAP, FIN), defaults to "ULT".
+    :param str sampling_rate: Sampling rate specifier (e.g. "15M", "05M", "30S"), defaults to "15M".
+    :param str version: Version identifier for the file, defaults to "0".
+    :param str project_type: Project type for the file (e.g. "OPS", "EXP"), defaults to "OPS".
+    :param _datetime.timedelta timespan: Timespan of each file, defaults to 2 days.
+    :param str if_file_present: What to do if file already present: "replace", "dont_replace", "prompt_user".
+    :raises Exception: If a file fails to download after all retries.
+    :return List[_Path]: List of pathlib.Path objects to downloaded (or decompressed) files.
     """
 
     if file_ext == "ERP" and analysis_center == "IGS" and solution_type == "FIN":
