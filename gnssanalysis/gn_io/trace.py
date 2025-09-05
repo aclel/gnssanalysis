@@ -6,6 +6,7 @@ import re as _re
 from io import BytesIO as _BytesIO
 
 import pandas as _pd
+import numpy as _np
 
 from .. import gn_aux as _gn_aux
 from .. import gn_const as _gn_const
@@ -137,7 +138,7 @@ _RE_TRACE_HEAD = _re.compile(
     rb"station\s*\:\s*(.{4})\n\w+\s*\:\s*(.+|)\n\w+\s*\:\s*(.+|)\n\w+\s*\:\s*(\d)\n\w+\s*\:\s*(.+)"
 )
 _RE_TRACE_LC = _re.compile(rb"PDE\sform\sLC.+((?:\n.+)+)")
-_RE_EL = _re.compile(rb"\*2 PDE-CS GPST\s+\w+\s+(\d+)\s+(\d+).0\s+(\w\d\d)\s+(\d+.\d+)")
+_RE_EL = _re.compile(rb"PDE-CS GPST\s+(?:\w+\s+)?(\d+)\s+(\d+(?:\.\d+)?)\s+([GREC]\d\d)\s+(\d+\.\d+)")
 
 
 def _find_trace(output_path: str) -> tuple:
@@ -194,20 +195,26 @@ def _find_trace(output_path: str) -> tuple:
 #     df_LC = _pd.concat([df1,df2,df3],axis=0)
 #     return df_LC.set_index(['time'])
 
-# def _read_trace_el(path_or_bytes):
-#     "Get elevation angles for satellites from trace file"
-#     if isinstance(path_or_bytes, str):
-#         trace_content = _gn_io.common.path2bytes(path_or_bytes) # will accept .trace.Z also
-#     else:
-#         trace_content = path_or_bytes
-#     trace_EL_list = _RE_EL.findall(string=trace_content)
+def _read_trace_el(path_or_bytes):
+    "Get elevation angles for satellites from trace file"
+    if isinstance(path_or_bytes, str):
+        trace_content = _gn_io.common.path2bytes(path_or_bytes) # will accept .trace.Z also
+    else:
+        trace_content = path_or_bytes
+    trace_EL_list = _RE_EL.findall(string=trace_content)
 
-#     el_df = _pd.DataFrame(trace_EL_list).astype({0:_np.int16, 1:_np.int32, 2:bytes, 3:_np.float})
-#     el_df[2] = el_df[2].str.decode("utf-8")
-#     el_df['time'] = _gn_datetime.gpsweeksec2datetime(gps_week=el_df[0], tow=el_df[1], as_j2000=True)
-#     el_df.drop(columns=[0,1],inplace=True)
-#     el_df.columns = ['PRN','el','time']
-#     return el_df.set_index(['time'])
+    el_df = _pd.DataFrame(trace_EL_list)
+    if len(el_df) > 0:
+        el_df[0] = el_df[0].astype(_np.int32)  # GPS week
+        el_df[1] = el_df[1].astype(float)      # Time of week
+        el_df[2] = el_df[2].str.decode("utf-8") # Satellite PRN
+        el_df[3] = el_df[3].astype(float)      # Elevation
+        el_df['TIME'] = _gn_datetime.gpsweeksec2datetime(gps_week=el_df[0], tow=el_df[1], as_j2000=True)
+        el_df.drop(columns=[0,1],inplace=True)
+        el_df.columns = ['PRN','el','TIME']
+    else:
+        el_df = el_df.reindex(columns=['PRN','el','TIME'])
+    return el_df.set_index(['TIME'])
 
 
 def squeeze_column_names(df, delimiter=None):
