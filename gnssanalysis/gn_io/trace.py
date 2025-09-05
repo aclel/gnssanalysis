@@ -101,13 +101,13 @@ def _read_trace_residuals(path_or_bytes, it_max_only=True, throw_if_nans=False):
         usecols=[1, 2, 3, 4, 5, 6, 7, 8, 9, 11],
         skipinitialspace=True,
         na_values="NONE",
-        names=["It", "TIME", "TYPE", "SAT", "SITE", "NUM", "PREFIT", "POSTFIT", "STD", "BLK"],
+        names=["It", "TIME", "TYPE", "SAT", "SITE", "CODE", "PREFIT", "POSTFIT", "STD", "BLK"],
         dtype={
             "It": int,
             "TYPE": object,
             "SAT": object,
             "SITE": object,
-            "NUM": int,
+            "CODE": object,
             "PREFIT": float,
             "POSTFIT": float,
             "STD": float,
@@ -122,14 +122,14 @@ def _read_trace_residuals(path_or_bytes, it_max_only=True, throw_if_nans=False):
     df.TIME = _gn_datetime.datetime2j2000(df.TIME.values)
 
     if not it_max_only:
-        return df.set_index(["TIME", "SITE", "TYPE", "NUM", "SAT", "BLK"])
+        return df.set_index(["TIME", "SITE", "TYPE", "CODE", "SAT", "BLK"])
     # to get max_ind values pandas >= 1.1 is required
     it_max_ind = df[["TIME", "It"]].groupby(["TIME"]).max().reset_index().values.tolist()
     return (
         df.set_index(["TIME", "It"])
         .loc[it_max_ind]
         .reset_index()
-        .set_index(["TIME", "SITE", "TYPE", "SAT", "NUM", "It", "BLK"])
+        .set_index(["TIME", "SITE", "TYPE", "SAT", "CODE", "It", "BLK"])
     )
 
 
