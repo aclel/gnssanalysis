@@ -473,10 +473,10 @@ def check_whether_to_download(
                 logging.info(f"Option chosen: Don't Replace. Leaving {output_path.name} as is in {download_dir}")
                 download = False
         elif if_file_present == "dont_replace":
-            logging.info(f"File {output_path} already present; Flag --dont-replace is on ... skipping download ...")
+            logging.debug(f"File {output_path} already present; Flag --dont-replace is on ... skipping download ...")
             download = False
         elif if_file_present == "replace":
-            logging.info(
+            logging.debug(
                 f"File {output_path} already present; Flag --replace is on ... re-downloading to {download_dir}"
             )
             download = True
@@ -545,7 +545,7 @@ def attempt_url_download(
     # If the download_filename is not provided, use the filename from the URL
     if filename is None or len(filename) == 0:
         filename = url[url.rfind("/") + 1 :]
-    logging.info(f"Attempting URL Download of {type_of_file} file - {filename} to {download_dir}")
+    logging.debug(f"Attempting URL Download of {type_of_file} file - {filename} to {download_dir}")
     # Use the check_whether_to_download function to determine whether to download the file
     download_filepath = check_whether_to_download(
         filename=filename, download_dir=download_dir, if_file_present=if_file_present
@@ -793,7 +793,7 @@ def download_file_from_cddis(
     retries = 0
     while retries <= max_retries:
         try:
-            logging.info(f"Downloading {note_filetype or filename} from {url}")
+            logging.debug(f"Downloading {note_filetype or filename} from {url}")
             with _request.urlopen(url) as response:
                 if response.status == 401:
                     logging.error("Unauthorized (401). Did you set up .netrc with Earthdata login?")
@@ -903,9 +903,9 @@ def download_product_from_cddis(
         start_epoch = gps_week_day_to_datetime(f"{start_epoch_as_gps_date.gpswk}")
         timespan = _datetime.timedelta(days=7)
 
-    logging.info("Attempting CDDIS product download(s)")
-    logging.info(f"Start Epoch - {start_epoch}")
-    logging.info(f"End Epoch - {end_epoch}")
+    logging.debug("Attempting CDDIS product download(s)")
+    logging.debug(f"Start Epoch - {start_epoch}")
+    logging.debug(f"End Epoch - {end_epoch}")
 
     if long_filename is None:
         long_filename = long_filename_cddis_cutoff(start_epoch)
@@ -955,7 +955,7 @@ def download_product_from_cddis(
                 if_file_present=if_file_present,
             )
             if download_filepath is not None:
-                logging.info(f"Downloading {product_filename} from CDDIS")
+                logging.debug(f"Downloading {product_filename} from CDDIS")
                 try:
                     downloaded = download_file_from_cddis(
                         filename=product_filename,
