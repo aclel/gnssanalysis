@@ -30,7 +30,9 @@ from ftplib import FTP_TLS as _FTP_TLS
 from pathlib import Path as _Path
 from typing import Any, Generator, List, Literal, Optional, Tuple, Union
 from urllib import request as _request
-from urllib.error import HTTPError as _HTTPError
+from urllib.error import HTTPError as _HTTPError, URLError as _URLError
+import requests as _requests
+import warnings as _warnings
 
 import boto3
 import numpy as _np
@@ -43,6 +45,7 @@ from .gn_utils import ensure_folders
 MB = 1024 * 1024
 
 CDDIS_FTP = "gdc.cddis.eosdis.nasa.gov"
+CDDIS_URL = "https://cddis.nasa.gov/archive"
 PRODUCT_BASE_URL = "https://peanpod.s3.ap-southeast-2.amazonaws.com/aux/products/"
 IGS_FILES_URL = "https://files.igs.org/pub/"
 BERN_URL = "http://ftp.aiub.unibe.ch/"
@@ -734,75 +737,129 @@ def ftp_tls(url: str, **kwargs) -> Generator[Any, Any, Any]:
 
 def download_file_from_cddis(
     filename: str,
-    ftp_folder: str,
-    output_folder: _Path,
+    ftp_folder: Optional[str] = None,     # deprecated
+    url_folder: Optional[str] = None,     # preferred
+    output_folder: _Path = _Path("."),
     max_retries: int = 3,
     decompress: bool = True,
     if_file_present: str = "prompt_user",
     note_filetype: str = None,
 ) -> Union[_Path, None]:
-    """Downloads a single file from the CDDIS ftp server
-
-    :param str filename: Name of the file to download
-    :param str ftp_folder: Folder where the file is stored on the remote server
-    :param _Path output_folder: Local folder to store the output file
-    :param int max_retries: Number of retries before raising error, defaults to 3
-    :param bool decompress: If true, decompresses files on download, defaults to True
-    :param str if_file_present: What to do if file already present: "replace", "dont_replace", defaults to "prompt_user"
-    :param str note_filetype: How to label the file for STDOUT messages, defaults to None
-    :raises e: Raise any error that is run into by ftplib
-    :return _Path or None: The pathlib.Path of the downloaded file (or decompressed output of it). Returns None if the
-        file already existed and was skipped.
     """
-    with ftp_tls(CDDIS_FTP) as ftps:
-        ftps.cwd(ftp_folder)
-        retries = 0
-        while retries <= max_retries:
-            try:
-                download_filepath = attempt_ftps_download(
-                    download_dir=output_folder,
-                    ftps=ftps,
-                    filename=filename,
-                    type_of_file=note_filetype,
-                    if_file_present=if_file_present,
-                )
-                if download_filepath is None:  # File already existed and was skipped
+    Download a single file from the CDDIS HTTPS archive.
+
+    :param str filename: Name of the file to download.
+    :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
+    :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
+    :param _Path output_folder: Local folder to store the output file.
+    :param int max_retries: Number of retries before raising error, defaults to 3.
+    :param bool decompress: If True, decompresses the file after download (e.g. .Z, .gz), defaults to True.
+    :param str if_file_present: What to do if file already present:
+        - "replace": overwrite
+        - "dont_replace": skip
+        - "prompt_user": interactively ask user, defaults to "prompt_user".
+    :param str note_filetype: Label for log/STDOUT messages, defaults to None.
+    :raises URLError, HTTPError, OSError: If the file cannot be downloaded after retries.
+    :return _Path or None: The pathlib.Path of the downloaded file (or decompressed output of it).
+                          Returns None if the file already existed and was skipped.
+    """
+
+    if ftp_folder and url_folder:
+        raise ValueError("Use either 'ftp_folder' or 'url_folder', not both.")
+    folder = url_folder or ftp_folder
+    if ftp_folder is not None:
+        _warnings.warn(
+            "Argument 'ftp_folder' is deprecated; use 'url_folder' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    url = f"{CDDIS_URL}/{folder}/{filename}"
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    local_path = output_folder / filename
+
+    # File exists handling
+    if local_path.exists():
+        if if_file_present == "dont_replace":
+            logging.info(f"Skipping {filename} (already exists).")
+            return None
+        elif if_file_present == "prompt_user":
+            ans = input(f"{filename} exists. Replace? [y/N] ")
+            if ans.lower() not in ["y", "yes"]:
+                return None
+
+    # Retry loop
+    retries = 0
+    while retries <= max_retries:
+        try:
+            logging.info(f"Downloading {note_filetype or filename} from {url}")
+            with _request.urlopen(url) as response:
+                if response.status == 401:
+                    logging.error("Unauthorized (401). Did you set up .netrc with Earthdata login?")
                     return None
-                # File was downloaded
-                logging.info(f"Downloaded {download_filepath.name}")
-                if decompress:  # Does it need unpacking?
-                    # Decompress, and return the path of the resultant file
-                    logging.info(f"Decompressing downloaded file {download_filepath.name}")
-                    return decompress_file(input_filepath=download_filepath, delete_after_decompression=True)
-                # File doesn't need unpacking, return downloaded path
-                return download_filepath
-            except _ftplib.all_errors as e:
-                retries += 1
-                if retries > max_retries:
-                    logging.error(f"Failed to download {filename} and reached maximum retry count ({max_retries}).", e)
-                    if (output_folder / filename).is_file():
-                        (output_folder / filename).unlink()
-                    raise e
+                if response.status != 200:
+                    raise _HTTPError(url, response.status, "Bad status", hdrs=None, fp=None)
+                with open(local_path, "wb") as f:
+                    shutil.copyfileobj(response, f)
 
-                logging.debug(f"Received an error ({e}) while try to download {filename}, retrying({retries}).")
-                # Add some backoff time (exponential random as it appears to be contention based?)
-                _time.sleep(_random.uniform(0.0, 2.0**retries))
+            logging.info(f"Downloaded {filename}")
 
-    # Fell out of loop and context manager without returning a result or raising an exception.
-    # Shouldn't be possible, raise exception if it somehow happens.
-    raise Exception("Failed to download file or raise exception. Some logic is broken.")
+            if decompress:
+                logging.info(f"Decompressing {filename}")
+                return decompress_file(local_path, delete_after_decompression=True)
+
+            return local_path
+
+        except (_HTTPError, _URLError, OSError) as e:
+            retries += 1
+            if retries > max_retries:
+                logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
+                if local_path.is_file():
+                    local_path.unlink()
+                raise
+            backoff = _random.uniform(0.0, 2.0 ** retries)
+            logging.warning(f"Error downloading {filename}: {e} "
+                            f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
+            _time.sleep(backoff)
+
+    raise Exception("Unexpected fallthrough in download_file_from_cddis.")
 
 
-def download_multiple_files_from_cddis(files: List[str], ftp_folder: str, output_folder: _Path) -> None:
-    """Downloads multiple files in a single folder from cddis in a thread pool.
-
-    :param files: List of str filenames
-    :ftp_folder: Folder where the file is stored on the remote
-    :output_folder: Folder to store the output files
+def download_multiple_files_from_cddis(
+    files: List[str],
+    ftp_folder: Optional[str] = None,     # deprecated
+    url_folder: Optional[str] = None,     # preferred
+    output_folder: _Path = _Path("."),
+) -> None:
     """
+    Download multiple files from the CDDIS HTTPS archive concurrently, using a thread pool.
+
+    :param List[str] files: List of filenames to download.
+    :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
+    :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
+    :param _Path output_folder: Local folder to store the output files.
+    :raises ValueError: If both ftp_folder and url_folder are provided.
+    :return None: Runs downloads in parallel, does not return values. Each file is handled independently.
+    """
+
+    if ftp_folder and url_folder:
+        raise ValueError("Use either 'ftp_folder' or 'url_folder', not both.")
+    folder = url_folder or ftp_folder
+    if ftp_folder is not None:
+        _warnings.warn(
+            "Argument 'ftp_folder' is deprecated; use 'url_folder' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     with _concurrent.futures.ThreadPoolExecutor() as executor:
-        # Wrap this in a list to force iteration of results and so get the first exception if any were raised
-        list(executor.map(download_file_from_cddis, files, _repeat(ftp_folder), _repeat(output_folder)))
+        list(executor.map(
+            download_file_from_cddis,
+            files,
+            _repeat(folder),
+            _repeat(output_folder)
+        ))
 
 
 def download_product_from_cddis(
@@ -820,36 +877,37 @@ def download_product_from_cddis(
     timespan: _datetime.timedelta = _datetime.timedelta(days=2),
     if_file_present: str = "prompt_user",
 ) -> List[_Path]:
-    """Download the file/s from CDDIS based on start and end epoch, to the download directory (download_dir)
-
-    :param _Path download_dir: Where to download files (local directory)
-    :param _datetime start_epoch: Start date/time of files to find and download
-    :param _datetime end_epoch: End date/time of files to find and download
-    :param str file_ext: Extension of files to download (e.g. SP3, CLK, ERP, etc)
-    :param int limit: Variable to limit the number of files downloaded, defaults to None
-    :param bool long_filename: Search for IGS long filename, if None use start_epoch to determine, defaults to None
-    :param str analysis_center: Which analysis center's files to download (e.g. COD, GFZ, WHU, etc), defaults to "IGS"
-    :param str solution_type: Which solution type to download (e.g. ULT, RAP, FIN), defaults to "ULT"
-    :param str sampling_rate: Sampling rate of file to download, defaults to "15M"
-    :param str project_type: Project type of file to download (e.g. ), defaults to "OPS"
-    :param _datetime.timedelta timespan: Timespan of the file/s to download, defaults to _datetime.timedelta(days=2)
-    :param str if_file_present: What to do if file already present: "replace", "dont_replace", defaults to "prompt_user"
-    :raises FileNotFoundError: Raise error if the specified file cannot be found on CDDIS
-    :return List[_Path]: Return list of paths of downloaded files
     """
-    # Download the correct IGS FIN ERP files
-    if file_ext == "ERP" and analysis_center == "IGS" and solution_type == "FIN":  # get the correct start_epoch
-        # From start_epoch provided, calculate GPS week, rewind to *beginning of that week*, and use that date.
-        # We do this because the weekly files are released/dated as Sunday of each GPS week.
+    Download one or more product files from the CDDIS HTTPS archive, based on start and end epochs.
+
+    :param _Path download_dir: Where to download files (local directory).
+    :param _datetime.datetime start_epoch: Start date/time of files to download.
+    :param _datetime.datetime end_epoch: End date/time of files to download.
+    :param str file_ext: Extension of files to download (e.g. SP3, CLK, ERP, etc).
+    :param int limit: Limit the number of files to download. Defaults to None (no limit).
+    :param bool long_filename: Whether to use IGS long filename convention.
+                               If None, automatically determined from start_epoch.
+    :param str analysis_center: Analysis center to download from (e.g. COD, GFZ, IGS), defaults to "IGS".
+    :param str solution_type: Solution type to download (e.g. ULT, RAP, FIN), defaults to "ULT".
+    :param str sampling_rate: Sampling rate specifier (e.g. "15M", "05M", "30S"), defaults to "15M".
+    :param str version: Version identifier for the file, defaults to "0".
+    :param str project_type: Project type for the file (e.g. "OPS", "EXP"), defaults to "OPS".
+    :param _datetime.timedelta timespan: Timespan of each file, defaults to 2 days.
+    :param str if_file_present: What to do if file already present: "replace", "dont_replace", "prompt_user".
+    :raises Exception: If a file fails to download after all retries.
+    :return List[_Path]: List of pathlib.Path objects to downloaded (or decompressed) files.
+    """
+
+    if file_ext == "ERP" and analysis_center == "IGS" and solution_type == "FIN":
         start_epoch_as_gps_date = GPSDate(start_epoch)
-        # Get GPS week number *without* DayOfWeek suffix (therefore start of the GPS Week), then convert back to datetime
         start_epoch = gps_week_day_to_datetime(f"{start_epoch_as_gps_date.gpswk}")
         timespan = _datetime.timedelta(days=7)
 
-    logging.info("Attempting CDDIS Product download/s")
+    logging.info("Attempting CDDIS product download(s)")
     logging.info(f"Start Epoch - {start_epoch}")
     logging.info(f"End Epoch - {end_epoch}")
-    if long_filename == None:
+
+    if long_filename is None:
         long_filename = long_filename_cddis_cutoff(start_epoch)
 
     reference_start = _deepcopy(start_epoch)
@@ -864,22 +922,24 @@ def download_product_from_cddis(
         version=version,
         project=project_type,
     )
-    logging.debug(
-        f"Generated filename: {product_filename}, with GPS Date: {gps_date.gpswkD} and reference: {reference_start}"
-    )
+    logging.debug(f"Generated filename: {product_filename}, GPS: {gps_date.gpswkD}, ref: {reference_start}")
 
     ensure_folders([download_dir])
     download_filepaths = []
-    with ftp_tls(CDDIS_FTP) as ftps:
-        try:
-            ftps.cwd(f"gnss/products/{gps_date.gpswk}")
-        except _ftplib.all_errors as e:
-            logging.warning(f"{reference_start} too recent")
-            logging.warning(f"ftp_lib error: {e}")
+
+    # Shift so first loop iteration aligns correctly
+    reference_start -= _datetime.timedelta(hours=24)
+    count = 0
+    remain = end_epoch - reference_start
+
+    while remain.total_seconds() > timespan.total_seconds():
+        if count == limit:
+            remain = _datetime.timedelta(days=0)
+        else:
             product_filename, gps_date, reference_start = generate_product_filename(
                 reference_start,
                 file_ext,
-                shift=-6,
+                shift=24,
                 long_filename=long_filename,
                 analysis_center=analysis_center,
                 timespan=timespan,
@@ -888,49 +948,29 @@ def download_product_from_cddis(
                 version=version,
                 project=project_type,
             )
-            ftps.cwd(f"gnss/products/{gps_date.gpswk}")
 
-            all_files = ftps.nlst()
-            if not (product_filename in all_files):
-                logging.warning(f"{product_filename} not in gnss/products/{gps_date.gpswk} - too recent")
-                raise FileNotFoundError
-
-        # reference_start will be changed in the first run through while loop below
-        reference_start -= _datetime.timedelta(hours=24)
-        count = 0
-        remain = end_epoch - reference_start
-        while remain.total_seconds() > timespan.total_seconds():
-            if count == limit:
-                remain = _datetime.timedelta(days=0)
-            else:
-                product_filename, gps_date, reference_start = generate_product_filename(
-                    reference_start,
-                    file_ext,
-                    shift=24,  # Shift at the start of the loop - speeds up total download time
-                    long_filename=long_filename,
-                    analysis_center=analysis_center,
-                    timespan=timespan,
-                    solution_type=solution_type,
-                    sampling_rate=sampling_rate,
-                    version=version,
-                    project=project_type,
-                )
-                download_filepath = check_whether_to_download(
-                    filename=product_filename, download_dir=download_dir, if_file_present=if_file_present
-                )
-                if download_filepath is not None:
-                    logging.info(f"Downloading {product_filename} from CDDIS")
-                    download_filepaths.append(
-                        download_file_from_cddis(
-                            filename=product_filename,
-                            ftp_folder=f"gnss/products/{gps_date.gpswk}",
-                            output_folder=download_dir,
-                            if_file_present=if_file_present,
-                            note_filetype=file_ext,
-                        )
+            download_filepath = check_whether_to_download(
+                filename=product_filename,
+                download_dir=download_dir,
+                if_file_present=if_file_present,
+            )
+            if download_filepath is not None:
+                logging.info(f"Downloading {product_filename} from CDDIS")
+                try:
+                    downloaded = download_file_from_cddis(
+                        filename=product_filename,
+                        url_folder=f"gnss/products/{gps_date.gpswk}",
+                        output_folder=download_dir,
+                        if_file_present=if_file_present,
+                        note_filetype=file_ext,
                     )
-                count += 1
-                remain = end_epoch - reference_start
+                    if downloaded:
+                        download_filepaths.append(downloaded)
+                except Exception as e:
+                    logging.warning(f"Could not fetch {product_filename}: {e}")
+
+            count += 1
+            remain = end_epoch - reference_start
 
     return download_filepaths
 
