@@ -847,22 +847,11 @@ def download_file_from_cddis(
     while retries <= max_retries:
         try:
             logging.debug(f"Downloading {note_filetype or filename} from {url}")
-<<<<<<< HEAD
-            with _request.urlopen(url) as response:
-                if response.status == 401:
-                    logging.error("Unauthorized (401). Did you set up .netrc with Earthdata login?")
-                    return None
-                if response.status != 200:
-                    raise _HTTPError(url, response.status, "Bad status", hdrs=None, fp=None)
-                with open(local_path, "wb") as f:
-                    shutil.copyfileobj(response, f)
-=======
             # Use simple NASA Earthdata authentication approach
             # Third example from: https://urs.earthdata.nasa.gov/documentation/for_users/data_access/python
             with _requests.Session() as session:
                 session.auth = (earthdata_username, earthdata_password)
                 response = session.get(url, stream=True)
->>>>>>> https
 
                 # Check if request was successful
                 response.raise_for_status()
