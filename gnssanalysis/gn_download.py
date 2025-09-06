@@ -641,9 +641,17 @@ def check_file_present(comp_filename: str, dwndir: str) -> bool:
 
 def decompress_file(input_filepath: _Path, delete_after_decompression: bool = False) -> Optional[_Path]:
     """
-    Given the file path to a compressed file, decompress it in-place
-    Assumption is that filename of final file is the stem of the compressed filename for .gz files
-    Option to delete original compressed file after decompression (Default: False)
+    Decompress a compressed file in-place.
+
+    Supports decompression of .gz, .tar, .tar.gz, and .Z files. For .gz files, the output filename
+    is derived from the stem of the compressed filename. Special handling is provided for RNX/CRX
+    files using the hatanaka module.
+
+    :param _Path input_filepath: Path to the compressed file to decompress.
+    :param bool delete_after_decompression: If True, delete the original compressed file after
+        successful decompression, defaults to False.
+    :return Optional[_Path]: Path to the decompressed file if successful, None if decompression
+        is not supported for the file extension.
     """
     # Get absolulte path
     input_file = input_filepath.resolve()
@@ -775,6 +783,7 @@ def download_file_from_cddis(
     output_folder: _Path = _Path("."),
     max_retries: int = 3,
     decompress: bool = True,
+    delete_after_decompression: bool = True,
     if_file_present: str = "prompt_user",
     note_filetype: str = None,
     username: str = None,
@@ -786,20 +795,22 @@ def download_file_from_cddis(
     :param str filename: Name of the file to download.
     :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
     :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
-    :param _Path output_folder: Local folder to store the output file.
+    :param _Path output_folder: Local folder to store the output file, defaults to current directory.
     :param int max_retries: Number of retries before raising error, defaults to 3.
     :param bool decompress: If True, decompresses the file after download (e.g. .Z, .gz), defaults to True.
+    :param bool delete_after_decompression: If True, delete the original compressed file after successful
+        decompression (only applies when decompress=True), defaults to True.
     :param str if_file_present: What to do if file already present:
-        - "replace": overwrite
-        - "dont_replace": skip
-        - "prompt_user": interactively ask user, defaults to "prompt_user".
+        - "replace": overwrite existing file
+        - "dont_replace": skip download if file exists
+        - "prompt_user": interactively ask user for decision, defaults to "prompt_user".
     :param str note_filetype: Label for log/STDOUT messages, defaults to None.
     :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
     :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
     :raises ValueError: If no credentials can be obtained.
     :raises requests.RequestException: If the file cannot be downloaded after retries.
-    :return _Path or None: The pathlib.Path of the downloaded file (or decompressed output of it).
-                          Returns None if the file already existed and was skipped.
+    :return Union[_Path, None]: Path to the downloaded file (or decompressed output if decompress=True).
+        Returns None if the file already existed and was skipped.
     """
 
     if ftp_folder and url_folder:
@@ -866,7 +877,7 @@ def download_file_from_cddis(
 
                 if decompress:
                     logging.debug(f"Decompressing {filename}")
-                    return decompress_file(download_filepath, delete_after_decompression=True)
+                    return decompress_file(download_filepath, delete_after_decompression=delete_after_decompression)
 
                 return download_filepath
 
@@ -933,6 +944,7 @@ def download_multiple_files_from_cddis(
             _repeat(output_folder),
             _repeat(3),  # max_retries
             _repeat(True),  # decompress
+            _repeat(True), # delete_after_decompression
             _repeat("prompt_user"),  # if_file_present
             _repeat(None),  # note_filetype
             _repeat(earthdata_username),  # username
@@ -953,31 +965,40 @@ def download_product_from_cddis(
     version: str = "0",
     project_type: str = "OPS",
     timespan: _datetime.timedelta = _datetime.timedelta(days=2),
+    delete_after_decompression: bool = True,
     if_file_present: str = "prompt_user",
     username: str = None,
     password: str = None,
 ) -> List[_Path]:
     """
-    Download one or more product files from the CDDIS HTTPS archive, based on start and end epochs.
+    Download one or more product files from the CDDIS HTTPS archive based on date range.
 
-    :param _Path download_dir: Where to download files (local directory).
+    Downloads product files for the specified time period, automatically generating appropriate
+    filenames based on IGS conventions. Files are automatically decompressed after download.
+
+    :param _Path download_dir: Local directory where files will be downloaded.
     :param _datetime.datetime start_epoch: Start date/time of files to download.
     :param _datetime.datetime end_epoch: End date/time of files to download.
     :param str file_ext: Extension of files to download (e.g. SP3, CLK, ERP, etc).
-    :param int limit: Limit the number of files to download. Defaults to None (no limit).
-    :param bool long_filename: Whether to use IGS long filename convention.
-                               If None, automatically determined from start_epoch.
+    :param int limit: Maximum number of files to download, defaults to None (no limit).
+    :param Optional[bool] long_filename: Whether to use IGS long filename convention.
+        If None, automatically determined from start_epoch.
     :param str analysis_center: Analysis center to download from (e.g. COD, GFZ, IGS), defaults to "IGS".
     :param str solution_type: Solution type to download (e.g. ULT, RAP, FIN), defaults to "ULT".
     :param str sampling_rate: Sampling rate specifier (e.g. "15M", "05M", "30S"), defaults to "15M".
     :param str version: Version identifier for the file, defaults to "0".
     :param str project_type: Project type for the file (e.g. "OPS", "EXP"), defaults to "OPS".
-    :param _datetime.timedelta timespan: Timespan of each file, defaults to 2 days.
-    :param str if_file_present: What to do if file already present: "replace", "dont_replace", "prompt_user".
+    :param _datetime.timedelta timespan: Timespan covered by each file, defaults to 2 days.
+    :param bool delete_after_decompression: If True, delete the original compressed file after successful
+        decompression, defaults to True.
+    :param str if_file_present: What to do if file already present:
+        - "replace": overwrite existing file
+        - "dont_replace": skip download if file exists
+        - "prompt_user": interactively ask user for decision, defaults to "prompt_user".
     :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
     :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
     :raises Exception: If a file fails to download after all retries.
-    :return List[_Path]: List of pathlib.Path objects to downloaded (or decompressed) files.
+    :return List[_Path]: List of paths to successfully downloaded (and decompressed) files.
     """
 
     if file_ext == "ERP" and analysis_center == "IGS" and solution_type == "FIN":
@@ -1047,6 +1068,7 @@ def download_product_from_cddis(
                         note_filetype=file_ext,
                         username=username,
                         password=password,
+                        delete_after_decompression=delete_after_decompression
                     )
                     if downloaded:
                         download_filepaths.append(downloaded)
