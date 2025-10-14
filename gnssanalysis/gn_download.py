@@ -938,6 +938,7 @@ def download_product_from_cddis(
     sampling_rate: str = "15M",
     version: str = "0",
     project_type: str = "OPS",
+    campaign: Optional[Literal["repro1", "repro2", "repro3"]] = None,
     timespan: _datetime.timedelta = _datetime.timedelta(days=2),
     if_file_present: str = "prompt_user",
     username: str = None,
@@ -956,11 +957,13 @@ def download_product_from_cddis(
     :param str sampling_rate: Sampling rate of file to download, defaults to "15M"
     :param str version: Version identifier for the file, defaults to "0"
     :param str project_type: Project type of file to download (e.g. ), defaults to "OPS"
+    :param Literal["repro1", "repro2", "repro3"] campaign: IGS reprocessing campaign to download from (repro3 valid for GPS weeks 729-2237), defaults to None (standard products)
     :param _datetime.timedelta timespan: Timespan of the file/s to download, defaults to _datetime.timedelta(days=2)
     :param str if_file_present: What to do if file already present: "replace", "dont_replace", defaults to "prompt_user"
     :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
     :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
     :raises FileNotFoundError: Raise error if the specified file cannot be found on CDDIS
+    :raises ValueError: If repro3 campaign requested for GPS weeks outside valid range (729-2237)
     :raises Exception: If a file fails to download after all retries.
     :return List[_Path]: List of pathlib.Path objects to downloaded (or decompressed) files.
     """
@@ -977,8 +980,39 @@ def download_product_from_cddis(
     logging.info(f"Start Epoch - {start_epoch}")
     logging.info(f"End Epoch - {end_epoch}")
 
-    if long_filename is None:
-        long_filename = long_filename_cddis_cutoff(start_epoch)
+    # Validate GPS week range for repro3 campaign
+    if campaign == "repro3":
+        start_gps_week = GPSDate(start_epoch).gpswk
+        end_gps_week = GPSDate(end_epoch).gpswk
+        if int(start_gps_week) < 729 or int(end_gps_week) > 2237:
+            raise ValueError(f"repro3 campaign only valid for GPS weeks 729-2237 (requested: {start_gps_week}-{end_gps_week})")
+
+    # Campaign products always use long filenames with specific project codes
+    if campaign == "repro3":
+        long_filename = True
+        project_type = "R03"
+        # SNX files use version 1 in repro3, others use version 2
+        if file_ext == "SNX":
+            version = "1"
+        else:
+            version = "2"  # IGS2 is the latest repro3 version for SP3/CLK/ERP
+    elif campaign == "repro2":
+        long_filename = True
+        project_type = "R02"
+        version = "1"
+    elif campaign == "repro1":
+        long_filename = True
+        project_type = "R01"
+        version = "0"
+    else:
+        # Non-OPS project types (MGX, EXP, etc.) always use long filenames
+        if project_type != "OPS":
+            logging.info(f"Forcing long_filename=True for non-OPS project_type: {project_type}")
+            long_filename = True
+        elif long_filename is None:
+            long_filename = long_filename_cddis_cutoff(start_epoch)
+
+    logging.info(f"Using long_filename={long_filename}, project_type={project_type}, version={version}, analysis_center={analysis_center}")
 
     reference_start = _deepcopy(start_epoch)
     product_filename, gps_date, reference_start = generate_product_filename(
@@ -1029,9 +1063,15 @@ def download_product_from_cddis(
             if download_filepath is not None:
                 logging.info(f"Downloading {product_filename} from CDDIS")
                 try:
+                    # Construct URL folder based on campaign
+                    if campaign is None:
+                        url_folder = f"gnss/products/{gps_date.gpswk}"
+                    else:
+                        url_folder = f"gnss/products/{campaign}/{gps_date.gpswk}"
+
                     downloaded = download_file_from_cddis(
                         filename=product_filename,
-                        url_folder=f"gnss/products/{gps_date.gpswk}",
+                        url_folder=url_folder,
                         output_folder=download_dir,
                         if_file_present=if_file_present,
                         note_filetype=file_ext,
