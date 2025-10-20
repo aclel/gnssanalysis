@@ -991,11 +991,13 @@ def download_product_from_cddis(
     if campaign == "repro3":
         long_filename = True
         project_type = "R03"
-        # SNX files use version 1 in repro3, others use version 2
-        if file_ext == "SNX":
-            version = "1"
-        else:
-            version = "2"  # IGS2 is the latest repro3 version for SP3/CLK/ERP
+        # Auto-set version for IGS products in repro3 (IGS uses version 1 for SNX, version 2 for others)
+        # For other analysis centers (e.g., COD), respect the explicitly provided version parameter
+        if analysis_center == "IGS":
+            if file_ext == "SNX":
+                version = "1"
+            else:
+                version = "2"  # IGS2 is the latest repro3 version for SP3/CLK/ERP
     elif campaign == "repro2":
         long_filename = True
         project_type = "R02"
