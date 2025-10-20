@@ -139,6 +139,10 @@ _RE_TRACE_HEAD = _re.compile(
 )
 _RE_TRACE_LC = _re.compile(rb"PDE\sform\sLC.+((?:\n.+)+)")
 _RE_EL = _re.compile(rb"PDE-CS GPST\s+(?:\w+\s+)?(\d+)\s+(\d+(?:\.\d+)?)\s+([GREC]\d\d)\s+(\d+\.\d+)")
+_RE_PDE_CS_SECTION = _re.compile(
+    rb"\*-------- PDE cycle slip detection & repair --------\*[^\n]*\n\s*\nPDE-CS\s+GPST[^\n]+\n\s*\n((?:PDE-CS[^\n]+\n?)*)",
+    _re.MULTILINE
+)
 
 
 def _find_trace(output_path: str) -> tuple:
@@ -215,6 +219,185 @@ def _read_trace_el(path_or_bytes):
     else:
         el_df = el_df.reindex(columns=['PRN','el','TIME'])
     return el_df.set_index(['TIME'])
+
+
+def _read_trace_pde_cs(path_or_bytes):
+    """Extract PDE cycle slip detection & repair metrics from trace file.
+
+    Returns a DataFrame with columns:
+    - TIME: J2000 timestamp
+    - PRN: Satellite ID
+    - mode: Frequency mode (TRIP/DUAL/None)
+    - el: Elevation angle (degrees)
+    - lamw: Lambda wide-lane (meters)
+    - gf12: Geometry-free L1-L2 (meters)
+    - mw12: Melbourne-Wubbena L1-L2 (meters)
+    - siggf: Sigma geometry-free (meters)
+    - sigmw: Sigma Melbourne-Wubbena (meters)
+    - lamew: Lambda extra-wide-lane (meters)
+    - gf25: Geometry-free L2-L5 (meters)
+    - mw25: Melbourne-Wubbena L2-L5 (meters)
+    - vtpv: V-transpose P V statistic
+    - val: Validation statistic
+    - thres: Threshold value
+    - N1, N2, N5: Ambiguity values (cycles)
+    """
+    if isinstance(path_or_bytes, str):
+        trace_content = _gn_io.common.path2bytes(path_or_bytes)
+    else:
+        trace_content = path_or_bytes
+
+    # Find all PDE-CS sections
+    pde_cs_sections = _RE_PDE_CS_SECTION.findall(string=trace_content)
+
+    if not pde_cs_sections:
+        return _pd.DataFrame()
+
+    # Combine all sections and parse line by line
+    pde_cs_bytes = b'\n'.join(pde_cs_sections)
+    lines = pde_cs_bytes.decode('utf-8').strip().split('\n')
+
+    records = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 6:  # Minimum: PDE-CS GPST week sec prn el
+            continue
+
+        # Parse base fields
+        idx = 0
+        marker = parts[idx]  # PDE-CS
+        idx += 1
+        timesys = parts[idx]  # GPST
+        idx += 1
+
+        # Check for optional mode (TRIP/DUAL)
+        mode = None
+        if parts[idx] in ['TRIP', 'DUAL']:
+            mode = parts[idx]
+            idx += 1
+
+        # Week and second
+        try:
+            week = int(parts[idx])
+            sec = float(parts[idx + 1])
+            idx += 2
+        except (ValueError, IndexError):
+            continue
+
+        # PRN and elevation
+        try:
+            prn = parts[idx]
+            el = float(parts[idx + 1])
+            idx += 2
+        except (ValueError, IndexError):
+            continue
+
+        # Check for special markers
+        if idx < len(parts) and parts[idx].startswith('--'):
+            # Skip lines with --low_elevation--, --single frequency--, etc.
+            continue
+
+        # Parse metrics if available
+        record = {
+            'week': week,
+            'sec': sec,
+            'prn': prn,
+            'mode': mode,
+            'el': el,
+            'lamw': _np.nan,
+            'gf12': _np.nan,
+            'mw12': _np.nan,
+            'siggf': _np.nan,
+            'sigmw': _np.nan,
+            'lamew': _np.nan,
+            'gf25': _np.nan,
+            'mw25': _np.nan,
+            'vtpv': _np.nan,
+            'val': _np.nan,
+            'thres': _np.nan,
+            'N1': _np.nan,
+            'N2': _np.nan,
+            'N5': _np.nan,
+        }
+
+        # Try to parse the metric fields (lamw through mw25)
+        try:
+            if idx < len(parts):
+                record['lamw'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['gf12'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['mw12'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['siggf'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['sigmw'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
+                idx += 1
+            if idx < len(parts):
+                record['lamew'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
+                idx += 1
+            if idx < len(parts):
+                record['gf25'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['mw25'] = float(parts[idx]) if parts[idx] not in ['nan', '-nan'] else _np.nan
+                idx += 1
+        except (ValueError, IndexError):
+            pass
+
+        # Parse LC field: vtpv= X val= Y thres= Z
+        while idx < len(parts):
+            if parts[idx].startswith('vtpv='):
+                try:
+                    record['vtpv'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            elif parts[idx].startswith('val='):
+                try:
+                    record['val'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            elif parts[idx].startswith('thres='):
+                try:
+                    record['thres'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            else:
+                # Try parsing as N1, N2, N5 at the end
+                try:
+                    if _np.isnan(record['N1']):
+                        record['N1'] = float(parts[idx])
+                    elif _np.isnan(record['N2']):
+                        record['N2'] = float(parts[idx])
+                    elif _np.isnan(record['N5']):
+                        record['N5'] = float(parts[idx])
+                except ValueError:
+                    pass
+                idx += 1
+
+        records.append(record)
+
+    if not records:
+        return _pd.DataFrame()
+
+    # Create DataFrame
+    df = _pd.DataFrame(records)
+
+    # Convert GPS week/sec to J2000 time
+    df['TIME'] = _gn_datetime.gpsweeksec2datetime(gps_week=df['week'], tow=df['sec'], as_j2000=True)
+
+    # Drop week/sec and rename prn
+    df = df.drop(columns=['week', 'sec'])
+    df = df.rename(columns={'prn': 'PRN'})
+
+    return df.set_index(['TIME', 'PRN'])
 
 
 def squeeze_column_names(df, delimiter=None):
