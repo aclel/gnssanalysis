@@ -164,6 +164,16 @@ _RE_MEAS_DEWEIGHTED = _re.compile(
     r'-\s+preDeweightSigma:\s+([\d.]+)\s+'
     r'-\s+postDeweightSigma:\s+([\d.]+)'
 )
+_RE_AMB_REMOVED = _re.compile(
+    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
+    r'Ambiguity Removed\s+'
+    r'-\s+PREPROC\s+'
+    r'AMBIGUITY\s+'
+    r'(\w+)\s+'  # SAT
+    r'(\w+)\s+'  # SITE
+    r'(\w+)\s+'  # CODE
+    r'(.+)'      # Reasons (rest of line)
+)
 
 
 def _find_trace(output_path: str) -> tuple:
@@ -490,6 +500,177 @@ def _read_trace_pde_cs(path_or_bytes):
     df = df.rename(columns={'prn': 'PRN'})
 
     return df.set_index(['TIME', 'PRN'])
+
+
+def _read_trace_measurement_issues(path_or_bytes):
+    """Extract LARGE MEAS and Measurement Deweighted events from network TRACE file.
+
+    These events occur together - when a measurement has a large error, it gets deweighted.
+    This function extracts both and combines them into a single DataFrame.
+
+    LARGE MEAS format:
+    2019-01-01 00:04:00.00    LARGE MEAS    ERROR OF : 7.59618    AT 44 :     PHAS_MEAS     E12    ALIC        L1C
+
+    Measurement Deweighted format:
+    2019-01-01 00:04:00.00    Measurement Deweighted      - Postfit     PHAS_MEAS     E12    ALIC        L1C
+        - PostfitResidual: 0.017939    - preDeweightSigma: 0.003146    - postDeweightSigma: 3.145524
+
+    Parameters
+    ----------
+    path_or_bytes : str or bytes or Path
+        Path to network TRACE file or file bytes
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame indexed by [TIME, SITE, SAT, TYPE, CODE] with columns:
+        - large_meas_error: Error value from LARGE MEAS line (if present)
+        - large_meas_index: Index from LARGE MEAS line (if present)
+        - fit_type: 'postfit' or 'prefit' from Deweighted line (if present)
+        - postfit_residual: Residual value (if present)
+        - pre_deweight_sigma: Sigma before deweighting (if present)
+        - post_deweight_sigma: Sigma after deweighting (if present)
+    """
+    # Read file content
+    if isinstance(path_or_bytes, bytes):
+        content = path_or_bytes.decode('utf-8')
+    else:
+        # Handle str, Path, or any path-like object
+        with open(path_or_bytes, 'r') as f:
+            content = f.read()
+
+    large_meas_records = []
+    deweighted_records = []
+
+    # Parse both types of events
+    for line in content.splitlines():
+        # Check for LARGE MEAS
+        match = _RE_LARGE_MEAS.search(line)
+        if match:
+            from datetime import datetime
+            timestamp_str, error_val, index_val, meas_type, sat, site, code = match.groups()
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
+            dt64 = _np.datetime64(dt)
+            j2000_time = _gn_datetime.datetime2j2000(dt64)
+
+            large_meas_records.append({
+                'TIME': j2000_time,
+                'SITE': site.upper(),
+                'SAT': sat.upper(),
+                'TYPE': meas_type.upper(),
+                'CODE': code.upper(),
+                'large_meas_error': float(error_val),
+                'large_meas_index': int(index_val)
+            })
+            continue
+
+        # Check for Measurement Deweighted
+        match = _RE_MEAS_DEWEIGHTED.search(line)
+        if match:
+            from datetime import datetime
+            timestamp_str, fit_type, meas_type, sat, site, code, postfit_res, pre_sigma, post_sigma = match.groups()
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
+            dt64 = _np.datetime64(dt)
+            j2000_time = _gn_datetime.datetime2j2000(dt64)
+
+            deweighted_records.append({
+                'TIME': j2000_time,
+                'SITE': site.upper(),
+                'SAT': sat.upper(),
+                'TYPE': meas_type.upper(),
+                'CODE': code.upper(),
+                'fit_type': fit_type.lower(),
+                'postfit_residual': float(postfit_res),
+                'pre_deweight_sigma': float(pre_sigma),
+                'post_deweight_sigma': float(post_sigma)
+            })
+
+    # Combine the two DataFrames
+    dfs_to_merge = []
+
+    if large_meas_records:
+        large_meas_df = _pd.DataFrame(large_meas_records)
+        large_meas_df = large_meas_df.set_index(['TIME', 'SITE', 'SAT', 'TYPE', 'CODE'])
+        dfs_to_merge.append(large_meas_df)
+
+    if deweighted_records:
+        deweighted_df = _pd.DataFrame(deweighted_records)
+        deweighted_df = deweighted_df.set_index(['TIME', 'SITE', 'SAT', 'TYPE', 'CODE'])
+        dfs_to_merge.append(deweighted_df)
+
+    if not dfs_to_merge:
+        return _pd.DataFrame()
+
+    # Merge on common index (outer join to keep all records even if one type is missing)
+    if len(dfs_to_merge) == 2:
+        combined_df = dfs_to_merge[0].join(dfs_to_merge[1], how='outer')
+    else:
+        combined_df = dfs_to_merge[0]
+
+    return combined_df
+
+
+def _read_trace_ambiguity_removed(path_or_bytes):
+    """Extract Ambiguity Removed PREPROC events from network TRACE file.
+
+    These events indicate when ambiguities were removed during preprocessing
+    due to cycle slip detection (GF, MW, LLI, SCDIA) or single-frequency issues.
+
+    Format:
+    2019-01-01 01:24:00.00    Ambiguity Removed           - PREPROC     AMBIGUITY     R24    ALIC        L1C    - GF    - MW
+
+    Parameters
+    ----------
+    path_or_bytes : str or bytes or Path
+        Path to network TRACE file or file bytes
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame indexed by [TIME, SITE, SAT, CODE] with columns:
+        - reasons: String containing all removal reasons (e.g., "GF, MW, LLI")
+    """
+    # Read file content
+    if isinstance(path_or_bytes, bytes):
+        content = path_or_bytes.decode('utf-8')
+    else:
+        # Handle str, Path, or any path-like object
+        with open(path_or_bytes, 'r') as f:
+            content = f.read()
+
+    records = []
+
+    # Parse ambiguity removal events
+    for line in content.splitlines():
+        match = _RE_AMB_REMOVED.search(line)
+        if match:
+            from datetime import datetime
+            timestamp_str, sat, site, code, reasons_str = match.groups()
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
+            dt64 = _np.datetime64(dt)
+            j2000_time = _gn_datetime.datetime2j2000(dt64)
+
+            # Parse reasons from the rest of the line (e.g., "- GF    - MW" -> "GF, MW")
+            reasons = []
+            for part in reasons_str.split('-'):
+                part = part.strip()
+                if part:
+                    reasons.append(part)
+            reasons_combined = ', '.join(reasons) if reasons else ''
+
+            records.append({
+                'TIME': j2000_time,
+                'SITE': site.upper(),
+                'SAT': sat.upper(),
+                'CODE': code.upper(),
+                'reasons': reasons_combined
+            })
+
+    if not records:
+        return _pd.DataFrame()
+
+    df = _pd.DataFrame(records)
+    return df.set_index(['TIME', 'SITE', 'SAT', 'CODE'])
 
 
 def squeeze_column_names(df, delimiter=None):
