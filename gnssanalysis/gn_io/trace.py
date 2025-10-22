@@ -140,8 +140,29 @@ _RE_TRACE_HEAD = _re.compile(
 _RE_TRACE_LC = _re.compile(rb"PDE\sform\sLC.+((?:\n.+)+)")
 _RE_EL = _re.compile(rb"PDE-CS GPST\s+(?:\w+\s+)?(\d+)\s+(\d+(?:\.\d+)?)\s+([GREC]\d\d)\s+(\d+\.\d+)")
 _RE_PDE_CS_SECTION = _re.compile(
-    rb"\*-------- PDE cycle slip detection & repair --------\*[^\n]*\n\s*\nPDE-CS\s+GPST[^\n]+\n\s*\n((?:PDE-CS[^\n]+\n?)*)",
-    _re.MULTILINE
+    rb"\*-------- PDE cycle slip detection & repair --------\*.*?PDE-CS\s+GPST[^\n]+\n\s*\n((?:PDE-CS[^\n]+\n?)*)",
+    _re.MULTILINE | _re.DOTALL
+)
+_RE_LARGE_MEAS = _re.compile(
+    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
+    r'LARGE MEAS\s+'
+    r'ERROR OF\s*:\s*([\d.]+)\s+'
+    r'AT\s+(\d+)\s*:\s+'
+    r'(\w+)\s+'  # TYPE
+    r'(\w+)\s+'  # SAT
+    r'(\w+)\s+'  # SITE
+    r'(\w+)'     # CODE
+)
+_RE_MEAS_DEWEIGHTED = _re.compile(
+    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
+    r'Measurement Deweighted\s+-\s+(\w+)\s+'  # Fit type (Postfit/Prefit)
+    r'(\w+)\s+'  # TYPE
+    r'(\w+)\s+'  # SAT
+    r'(\w+)\s+'  # SITE
+    r'(\w+)\s+'  # CODE
+    r'-\s+PostfitResidual:\s+([\d.-]+)\s+'
+    r'-\s+preDeweightSigma:\s+([\d.]+)\s+'
+    r'-\s+postDeweightSigma:\s+([\d.]+)'
 )
 
 
@@ -161,43 +182,109 @@ def _find_trace(output_path: str) -> tuple:
     return station_names, trace_paths
 
 
-# def _read_trace_LC(path_or_bytes):
-#     '''Parses the LC combo block of the trace files producing
-#      a single dataframe. WORK-IN-PROGRESS'''
-#     # regex search string
-#     if isinstance(path_or_bytes, str):
-#         trace_content = _gn_io.common.path2bytes(path_or_bytes) # will accept .trace.Z also
-#     else:
-#         trace_content = path_or_bytes
-#     trace_LC_list = _RE_TRACE_LC.findall(string=trace_content)
-#     LC_bytes = b''.join(trace_LC_list)
-#     LC_bytes = LC_bytes.replace(b'=',b'') #getting rif of '='
+def _read_trace_LC(path_or_bytes):
+    '''Parses the LC combo block of the trace files producing a single dataframe.
 
-#     df_LC = _pd.read_csv(_BytesIO(LC_bytes),sep="\\s+",header=None,usecols=[1,2,4,6,8,9,10,11,12,13]).astype(
-#         {
-#             1: _np.int16, 2:_np.int32, 4: '<U3',
-#             6: '<U1', 8: '<U4',
-#             9: _np.float64, 10: '<U4', 11: _np.float64,
-#             12: '<U4', 13: _np.float64
-#         })
+    Returns a DataFrame with columns:
+    - TIME: J2000 timestamp
+    - PRN: Satellite ID
+    - combo_type: Type of combination (zd, mp, gf, mw, wl, if)
+    - code_type: Code type (L for phase, P for code)
+    - combo_label: Specific combination label (L1, L2, L5, gf12, etc.)
+    - value: Measurement value
+    '''
+    if isinstance(path_or_bytes, str):
+        trace_content = _gn_io.common.path2bytes(path_or_bytes)  # will accept .trace.Z also
+    else:
+        trace_content = path_or_bytes
 
-#     df_LC.columns = ['W','S','PRN','LP',8,9,10,11,12,13]
-#     df_LC['time'] = _gn_datetime.gpsweeksec2datetime(gps_week = df_LC.W,
-#                                                 tow = df_LC.S,
-#                                                 as_j2000=True)
-#     df_LC.drop(columns=['W','S'],inplace=True)
+    trace_LC_list = _RE_TRACE_LC.findall(string=trace_content)
+    if not trace_LC_list:
+        return _pd.DataFrame()
 
-#     df1 = df_LC[['time','PRN','LP',8,9]]
-#     df1.columns = ['time','PRN','LP','combo','value']
+    LC_bytes = b''.join(trace_LC_list)
 
-#     df2 = df_LC[['time','PRN','LP',10,11]]
-#     df2.columns = ['time','PRN','LP','combo','value']
+    # Parse lines and extract data
+    records = []
+    for line in LC_bytes.decode('utf-8').strip().split('\n'):
+        if not line.strip() or line.startswith('*'):
+            continue
 
-#     df3 = df_LC[['time','PRN','LP',12,13]]
-#     df3.columns = ['time','PRN','LP','combo','value']
+        parts = line.split()
+        if len(parts) < 10:
+            continue
 
-#     df_LC = _pd.concat([df1,df2,df3],axis=0)
-#     return df_LC.set_index(['time'])
+        # Parse timestamp (first two elements: date and time)
+        try:
+            timestamp = _pd.to_datetime(f"{parts[0]} {parts[1]}")
+        except:
+            continue
+
+        # Parse satellite (sat= PRN)
+        if parts[2] != 'sat=' or len(parts) < 4:
+            continue
+        prn = parts[3]
+
+        # Parse combo_type and code_type
+        combo_type = parts[4]
+        code_type = parts[5]
+
+        # Skip the '--' separator
+        if parts[6] != '--':
+            continue
+
+        # Parse the three measurements (label = value pairs)
+        # Two formats exist:
+        # 1) label = value (zd, mp): [..., 'L1', '=', '22093585.6788', ...]
+        # 2) label= value (gf, mw, wl, if): [..., 'gf12=', '7.8522', ...]
+        idx = 7
+        while idx < len(parts):
+            # Check if current element ends with '=' (format 2: label=)
+            if idx < len(parts) - 1 and parts[idx].endswith('='):
+                label = parts[idx].rstrip('=')
+                try:
+                    value = float(parts[idx + 1])
+                    records.append({
+                        'timestamp': timestamp,
+                        'PRN': prn,
+                        'combo_type': combo_type,
+                        'code_type': code_type,
+                        'combo_label': label,
+                        'value': value
+                    })
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 2
+            # Check if next element is '=' (format 1: label = )
+            elif idx < len(parts) - 2 and parts[idx + 1] == '=':
+                label = parts[idx]
+                try:
+                    value = float(parts[idx + 2])
+                    records.append({
+                        'timestamp': timestamp,
+                        'PRN': prn,
+                        'combo_type': combo_type,
+                        'code_type': code_type,
+                        'combo_label': label,
+                        'value': value
+                    })
+                    idx += 3
+                except (ValueError, IndexError):
+                    idx += 3
+            else:
+                idx += 1
+
+    if not records:
+        return _pd.DataFrame()
+
+    # Create DataFrame
+    df = _pd.DataFrame(records)
+
+    # Convert timestamp to J2000
+    df['TIME'] = _gn_datetime.datetime2j2000(df['timestamp'].values)
+    df = df.drop(columns=['timestamp'])
+
+    return df.set_index(['TIME', 'PRN', 'combo_type', 'code_type', 'combo_label'])
 
 def _read_trace_el(path_or_bytes):
     "Get elevation angles for satellites from trace file"
@@ -261,6 +348,11 @@ def _read_trace_pde_cs(path_or_bytes):
     for line in lines:
         parts = line.split()
         if len(parts) < 6:  # Minimum: PDE-CS GPST week sec prn el
+            continue
+
+        # Skip debug lines (detslp_ll:, detslp_gf:, etc.)
+        # Only process lines that start with "PDE-CS"
+        if parts[0] != 'PDE-CS':
             continue
 
         # Parse base fields
