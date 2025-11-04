@@ -287,34 +287,24 @@ def parse_ambiguity_resets(lines: _Iterable[str]) -> _pd.DataFrame:
 
 
 def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
-    """
-    Parse LC (linear combination) lines from station TRACE files.
+    """Parse LC lines in a memory-friendly long-form DataFrame."""
 
-    LC combos include: zd, mp, gf, mw, wl, if (zero-difference, multipath,
-    geometry-free, Melbourne-Wübbena, wide-lane, ionosphere-free)
+    columns = ['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+    frames = []
+    chunk = []
+    chunk_size = 50000
 
-    Parameters
-    ----------
-    lines : Iterable[str]
-        Iterable of text lines from LC combo blocks (e.g. from open(file))
-
-    Returns
-    -------
-    pd.DataFrame
-        Columns:
-            - datetime    : pd.Timestamp — timestamp
-            - sat         : str — satellite identifier
-            - combo_type  : str — combination type (zd, mp, gf, mw, wl, if)
-            - code_type   : str — code type (L for phase, P for code)
-            - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
-            - value       : float — measurement value
-    """
-    datetime_strs = []
-    sat_vals = []
-    combo_type_vals = []
-    code_type_vals = []
-    combo_label_vals = []
-    value_vals = []
+    def flush_chunk() -> None:
+        if not chunk:
+            return
+        df = _pd.DataFrame(chunk, columns=columns)
+        chunk.clear()
+        df['datetime'] = _pd.to_datetime(df['datetime'], errors='coerce')
+        df = df.dropna(subset=['datetime'])
+        if df.empty:
+            return
+        df['value'] = df['value'].astype(_np.float32)
+        frames.append(df)
 
     for ln in lines:
         if not isinstance(ln, str):
@@ -377,38 +367,18 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             if not _np.isfinite(value):
                 value = _np.nan
 
-            datetime_strs.append(dt_str)
-            sat_vals.append(sat)
-            combo_type_vals.append(combo_type)
-            code_type_vals.append(code_type)
-            combo_label_vals.append(label)
-            value_vals.append(value)
+            chunk.append((dt_str, sat, combo_type, code_type, label, _np.float32(value)))
+            if len(chunk) >= chunk_size:
+                flush_chunk()
 
-    if not datetime_strs:
-        return _pd.DataFrame(
-            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
-        )
+    flush_chunk()
 
-    df = _pd.DataFrame(
-        {
-            'datetime': _pd.to_datetime(datetime_strs, errors='coerce'),
-            'sat': sat_vals,
-            'combo_type': combo_type_vals,
-            'code_type': code_type_vals,
-            'combo_label': combo_label_vals,
-            'value': _np.array(value_vals, dtype=_np.float32),
-        }
-    )
-    df = df.dropna(subset=['datetime'])
-    if df.empty:
-        return _pd.DataFrame(
-            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
-        )
+    if not frames:
+        return _pd.DataFrame(columns=columns)
 
-    df['value'] = df['value'].astype(_np.float32)
+    df = _pd.concat(frames, ignore_index=True)
     for col in ['sat', 'combo_type', 'code_type', 'combo_label']:
         df[col] = _pd.Categorical(df[col])
-
     return df.reset_index(drop=True)
 
 
