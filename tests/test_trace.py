@@ -499,8 +499,46 @@ class TestParseResiduals(unittest.TestCase):
     SMOOTHED_TRACE = textwrap.dedent(
         """
         +RESIDUALS/PPP
-        % -1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.3000  0.0200 nan P-L1C
-        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  1.7000  0.0000 nan L-L1W
+        % -1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.3000  0.0200 0.0000 P-L1C
+        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  1.7000  0.0000 0.0000 L-L1W
+        -RESIDUALS/PPP
+        """
+    ).strip()
+
+    FORWARD_TRACE_MULTI = textwrap.dedent(
+        """
+        +RESIDUALS/PPP
+        %  0 2025-10-05 00:00:00.00 CODE_MEAS G06 HOB2 L1W -5.74025971 0.06586412 0.3449291 P-L1W
+        %  0 2025-10-05 00:00:00.00 CODE_MEAS G06 HOB2 L2W -9.63267831 -0.04041255 0.3449291 P-L2W
+        %  0 2025-10-05 00:00:00.00 PHAS_MEAS G06 HOB2 L1W 6.21998206 0.00000000 0.0034493 L-L1W
+        %  0 2025-10-05 00:00:00.00 PHAS_MEAS G06 HOB2 L2W 10.04347349 0.00000000 0.0034493 L-L2W
+        %  0 2025-10-05 00:00:30.00 CODE_MEAS G06 HOB2 L1W 0.79316409 -0.03955825 0.3448066 P-L1W
+        %  0 2025-10-05 00:00:30.00 CODE_MEAS G06 HOB2 L2W 0.85894545 -0.01656954 0.3448066 P-L2W
+        %  0 2025-10-05 00:00:30.00 PHAS_MEAS G06 HOB2 L1W 0.87663820 0.00084738 0.0034481 L-L1W
+        %  0 2025-10-05 00:00:30.00 PHAS_MEAS G06 HOB2 L2W 0.87129878 -0.00051872 0.0034481 L-L2W
+        %  0 2025-10-05 00:01:00.00 CODE_MEAS G06 HOB2 L1W -0.12997923 0.10875943 0.3446935 P-L1W
+        %  0 2025-10-05 00:01:00.00 CODE_MEAS G06 HOB2 L2W -0.35699512 -0.07082514 0.3446935 P-L2W
+        %  0 2025-10-05 00:01:00.00 PHAS_MEAS G06 HOB2 L1W 1.23456789 0.00000000 0.0034356 L-L1W
+        %  0 2025-10-05 00:01:00.00 PHAS_MEAS G06 HOB2 L2W 1.11111111 0.00000000 0.0034356 L-L2W
+        -RESIDUALS/PPP
+        """
+    ).strip()
+
+    SMOOTHED_TRACE_MULTI = textwrap.dedent(
+        """
+        +RESIDUALS/PPP
+        % -1 2025-10-05 00:00:00.00 CODE_MEAS G06 HOB2 L1W 0.00000000 0.16205732 0.0000000 P-L1W
+        % -1 2025-10-05 00:00:00.00 CODE_MEAS G06 HOB2 L2W 0.00000000 0.12038636 0.0000000 P-L2W
+        % -1 2025-10-05 00:00:00.00 PHAS_MEAS G06 HOB2 L1W 0.00000000 0.00008205 0.0000000 L-L1W
+        % -1 2025-10-05 00:00:00.00 PHAS_MEAS G06 HOB2 L2W 0.00000000 -0.00002716 0.0000000 L-L2W
+        % -1 2025-10-05 00:00:30.00 CODE_MEAS G06 HOB2 L1W 0.00000000 0.00702357 0.0000000 P-L1W
+        % -1 2025-10-05 00:00:30.00 CODE_MEAS G06 HOB2 L2W 0.00000000 0.13498779 0.0000000 P-L2W
+        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G06 HOB2 L1W 0.00000000 0.00188854 0.0000000 L-L1W
+        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G06 HOB2 L2W 0.00000000 -0.00113384 0.0000000 L-L2W
+        % -1 2025-10-05 00:01:00.00 CODE_MEAS G06 HOB2 L1W 0.00000000 0.18148249 0.0000000 P-L1W
+        % -1 2025-10-05 00:01:00.00 CODE_MEAS G06 HOB2 L2W 0.00000000 0.06148189 0.0000000 P-L2W
+        % -1 2025-10-05 00:01:00.00 PHAS_MEAS G06 HOB2 L1W 0.00000000 0.00063349 0.0000000 L-L1W
+        % -1 2025-10-05 00:01:00.00 PHAS_MEAS G06 HOB2 L2W 0.00000000 -0.00042137 0.0000000 L-L2W
         -RESIDUALS/PPP
         """
     ).strip()
@@ -526,7 +564,44 @@ class TestParseResiduals(unittest.TestCase):
             self.assertTrue((df["trace_type"] == "smoothed").all())
             self.assertTrue((df["iter"] == -1).all())
             self.assertSetEqual(set(df["recv"]), {"STAT", "OTHR"})
-            self.assertFalse(df["sigma"].isna().any(), "Sigma should be merged from forward residuals")
+            code_sigma = df[df["meas"] == "CODE_MEAS"]["sigma"].iloc[0]
+            phase_sigma = df[df["meas"] == "PHAS_MEAS"]["sigma"].iloc[0]
+            self.assertAlmostEqual(code_sigma, 0.4000, places=4)
+            self.assertAlmostEqual(phase_sigma, 0.0200, places=4)
+
+    def test_smoothed_merge_with_multiple_epochs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE_MULTI
+            )
+            smoothed_path = self._write_trace(
+                tmpdir_path, "Network_TEST_smoothed.TRACE", self.SMOOTHED_TRACE_MULTI
+            )
+
+            df = parse_residuals([forward_path, smoothed_path])
+
+            self.assertGreater(len(df), 0)
+            self.assertTrue((df["trace_type"] == "smoothed").all())
+            zero_mask = df["prefit"] == 0
+            self.assertTrue(zero_mask.any(), "Smoothed results should keep zero prefit")
+
+            sigma_values = df.groupby(["datetime", "sig"])["sigma"].first()
+            self.assertAlmostEqual(
+                sigma_values.loc[(pd.Timestamp("2025-10-05 00:00:00"), "L1W")],
+                0.3449291,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                sigma_values.loc[(pd.Timestamp("2025-10-05 00:00:30"), "L2W")],
+                0.3448066,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                sigma_values.loc[(pd.Timestamp("2025-10-05 00:01:00"), "L1W")],
+                0.3446935,
+                places=6,
+            )
 
     def test_forward_only_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:

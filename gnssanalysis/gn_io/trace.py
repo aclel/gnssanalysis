@@ -691,7 +691,7 @@ def parse_residuals(
             if not combined.empty:
                 forward_group_merge[key] = combined.set_index(key_columns)
 
-    selected: list[tuple[_Path, str]] = []
+    selected = []
     for (base_stem, parent), entry in grouped.items():
         smoothed_files = entry["smoothed"]
         forward_files = entry["forward"]
@@ -728,8 +728,9 @@ def parse_residuals(
 
     frames = []
     smoothed_file_cache = {}
-    for path, trace_type in selected:
-        group_key = (path.stem.replace("_smoothed", ""), path.parent)
+    for idx, (path, trace_type) in enumerate(selected):
+        base_stem = path.stem.replace("_smoothed", "")
+        group_key = (base_stem, path.parent)
 
         try:
             if trace_type == "forward":
@@ -751,6 +752,25 @@ def parse_residuals(
                         smoothed_file_cache[path] = df_raw
                         continue
                     df = df_raw.copy()
+                    sm_index = df.set_index(key_columns)
+                    forward_combined = forward_group_merge.get(group_key)
+                    if forward_combined is not None and not forward_combined.empty:
+                        aligned = forward_combined.reindex(sm_index.index)
+                        if aligned is not None:
+                            zero_fill_cols = {"sigma"}
+                            align_cols = [
+                                col
+                                for col in sm_index.columns
+                                if col not in {"prefit", "postfit", "iter"}
+                                and col in aligned.columns
+                            ]
+                            for col in align_cols:
+                                mask = sm_index[col].isna()
+                                if col in zero_fill_cols:
+                                    mask |= sm_index[col] == 0
+                                if mask.any():
+                                    sm_index.loc[mask, col] = aligned.loc[mask, col]
+                            df = sm_index.reset_index()
                     if smoothed_iteration is not None:
                         df = df[df["iter"] == smoothed_iteration]
                     smoothed_file_cache[path] = df
@@ -762,37 +782,11 @@ def parse_residuals(
         if df.empty:
             continue
 
-        if trace_type == "smoothed":
-            if smoothed_iteration is not None:
-                df = df[df["iter"] == smoothed_iteration]
-            merge_df = forward_group_merge.get(group_key)
-            if merge_df is not None and not merge_df.empty and not df.empty:
-                df_indexed = df.set_index(key_columns)
-                aligned = merge_df.reindex(df_indexed.index)
-                if aligned is not None:
-                    for col in df_indexed.columns:
-                        if col in {"prefit", "postfit", "iter"}:
-                            continue
-                        if col in aligned.columns:
-                            df_indexed[col] = df_indexed[col].where(
-                                df_indexed[col].notna(), aligned[col]
-                            )
-                df = df_indexed.reset_index()
-        elif trace_type == "smoothed" and smoothed_iteration is None:
-            merge_df = forward_group_merge.get(group_key)
-            if merge_df is not None and not merge_df.empty:
-                df_indexed = df.set_index(key_columns)
-                aligned = merge_df.reindex(df_indexed.index)
-                for col in df_indexed.columns:
-                    if col in {"prefit", "postfit", "iter"}:
-                        continue
-                    if col in aligned.columns:
-                        mask = df_indexed[col].isna()
-                        if mask.any():
-                            df_indexed.loc[mask, col] = aligned.loc[mask, col]
-                df = df_indexed.reset_index()
-        elif trace_type == "forward" and forward_keep_last:
-            df = keep_last_iteration(df)
+        if trace_type == "forward":
+            if forward_keep_last:
+                df = keep_last_iteration(df)
+        elif trace_type == "smoothed" and smoothed_iteration is not None:
+            df = df[df["iter"] == smoothed_iteration]
 
         if df.empty:
             continue
