@@ -618,6 +618,7 @@ def parse_residuals(
         )
 
     paths = list(paths or [])
+    key_columns = ["datetime", "meas", "sat", "recv", "sig", "label"]
     base_columns = [
         "iter",
         "date",
@@ -636,7 +637,7 @@ def parse_residuals(
         "trace_type",
     ]
     if include_source:
-        base_columns.append("source_path")
+            base_columns.append("source_path")
 
     if not paths:
         return _pd.DataFrame(columns=base_columns)
@@ -654,6 +655,41 @@ def parse_residuals(
         key = (base_stem, path.parent)
         entry = grouped.setdefault(key, {"smoothed": [], "forward": []})
         entry["smoothed" if is_smoothed else "forward"].append(path)
+
+    def _parse_residual_file(path: _Path) -> _pd.DataFrame:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            return parse_residual_lines(fh)
+
+    forward_file_cache = {}
+    forward_group_merge = {}
+    for key, entry in grouped.items():
+        frames_for_merge = []
+        for forward_path in entry["forward"]:
+            try:
+                df_raw = _parse_residual_file(forward_path)
+            except Exception as exc:
+                _warnings.warn(
+                    f"Failed to parse residuals from {forward_path}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+
+            if df_raw.empty:
+                continue
+
+            df_forward = df_raw.copy()
+            if forward_keep_last:
+                df_forward = keep_last_iteration(df_forward)
+            forward_file_cache[forward_path] = df_forward
+
+            frames_for_merge.append(keep_last_iteration(df_raw.copy()))
+
+        if frames_for_merge:
+            combined = _pd.concat(frames_for_merge, ignore_index=True)
+            combined = keep_last_iteration(combined)
+            if not combined.empty:
+                forward_group_merge[key] = combined.set_index(key_columns)
 
     selected: list[tuple[_Path, str]] = []
     for (base_stem, parent), entry in grouped.items():
@@ -691,10 +727,34 @@ def parse_residuals(
             selected.extend((path, "forward") for path in forward_files)
 
     frames = []
+    smoothed_file_cache = {}
     for path, trace_type in selected:
+        group_key = (path.stem.replace("_smoothed", ""), path.parent)
+
         try:
-            with path.open("r", encoding="utf-8", errors="ignore") as fh:
-                df = parse_residual_lines(fh)
+            if trace_type == "forward":
+                df = forward_file_cache.get(path)
+                if df is None:
+                    df_raw = _parse_residual_file(path)
+                    if df_raw.empty:
+                        continue
+                    df = df_raw.copy()
+                    if forward_keep_last:
+                        df = keep_last_iteration(df)
+                    forward_file_cache[path] = df
+                df = df.copy()
+            else:  # smoothed
+                df = smoothed_file_cache.get(path)
+                if df is None:
+                    df_raw = _parse_residual_file(path)
+                    if df_raw.empty:
+                        smoothed_file_cache[path] = df_raw
+                        continue
+                    df = df_raw.copy()
+                    if smoothed_iteration is not None:
+                        df = df[df["iter"] == smoothed_iteration]
+                    smoothed_file_cache[path] = df
+                df = df.copy()
         except Exception as exc:
             _warnings.warn(f"Failed to parse residuals from {path}: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -702,8 +762,22 @@ def parse_residuals(
         if df.empty:
             continue
 
-        if trace_type == "smoothed" and smoothed_iteration is not None:
-            df = df[df["iter"] == smoothed_iteration]
+        if trace_type == "smoothed":
+            if smoothed_iteration is not None:
+                df = df[df["iter"] == smoothed_iteration]
+            merge_df = forward_group_merge.get(group_key)
+            if merge_df is not None and not merge_df.empty and not df.empty:
+                df_indexed = df.set_index(key_columns)
+                aligned = merge_df.reindex(df_indexed.index)
+                if aligned is not None:
+                    for col in df_indexed.columns:
+                        if col in {"prefit", "postfit", "iter"}:
+                            continue
+                        if col in aligned.columns:
+                            df_indexed[col] = df_indexed[col].where(
+                                df_indexed[col].notna(), aligned[col]
+                            )
+                df = df_indexed.reset_index()
         elif trace_type == "forward" and forward_keep_last:
             df = keep_last_iteration(df)
 
