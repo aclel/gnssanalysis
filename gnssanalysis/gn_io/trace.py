@@ -412,147 +412,165 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+
 def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
-    """
-    Parse PDE cycle slip detection & repair metrics from TRACE files.
+    """Parse PDE-CS metrics in a streaming fashion to limit peak memory."""
 
-    PDE-CS lines contain metrics for cycle slip detection including geometry-free,
-    Melbourne-Wübbena combinations, and validation statistics.
+    columns = [
+        'datetime', 'sat', 'mode', 'flag',
+        'el', 'lamw', 'gf12', 'mw12', 'siggf', 'sigmw',
+        'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
+    ]
+    frames: list[_pd.DataFrame] = []
+    chunk: list[tuple] = []
+    chunk_size = 50000
 
-    Parameters
-    ----------
-    lines : Iterable[str]
-        Iterable of text lines (e.g. from open(file))
+    def _token_to_float(tok: str | None) -> float:
+        if tok is None:
+            return _np.nan
+        tl = tok.lower()
+        if tl in {"nan", "-nan", "inf", "-inf"}:
+            return _np.nan
+        try:
+            return float(tok)
+        except ValueError:
+            return _np.nan
 
-    Returns
-    -------
-    pd.DataFrame
-        Columns:
-            - datetime : pd.Timestamp — timestamp
-            - sat      : str — satellite identifier
-            - mode     : str — frequency mode (TRIP/DUAL/None)
-            - el       : float — elevation angle (degrees)
-            - lamw     : float — lambda wide-lane (meters)
-            - gf12     : float — geometry-free L1-L2 (meters)
-            - mw12     : float — Melbourne-Wübbena L1-L2 (meters)
-            - siggf    : float — sigma geometry-free (meters)
-            - sigmw    : float — sigma Melbourne-Wübbena (meters)
-            - lamew    : float — lambda extra-wide-lane (meters)
-            - gf25     : float — geometry-free L2-L5 (meters)
-            - mw25     : float — Melbourne-Wübbena L2-L5 (meters)
-            - vtpv     : float — V-transpose P V statistic
-            - val      : float — validation statistic
-            - thres    : float — threshold value
-            - N1       : float — ambiguity L1 (cycles)
-            - N2       : float — ambiguity L2 (cycles)
-            - N5       : float — ambiguity L5 (cycles)
-    """
-    line_list = []
+    def flush_chunk() -> None:
+        if not chunk:
+            return
+        df = _pd.DataFrame(chunk, columns=columns)
+        chunk.clear()
+        df['datetime'] = _pd.to_datetime(df['datetime'], errors='coerce')
+        df = df.dropna(subset=['datetime'])
+        if df.empty:
+            return
+        numeric_cols = columns[4:]
+        df[numeric_cols] = df[numeric_cols].astype(_np.float32)
+        frames.append(df)
+
     for ln in lines:
         if not isinstance(ln, str):
             continue
         stripped = ln.strip()
-        if stripped.startswith("PDE-CS"):
-            line_list.append(stripped)
-    if not line_list:
-        return _pd.DataFrame(columns=[
-            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
-            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
-        ])
+        if not stripped or not stripped.startswith("PDE-CS"):
+            continue
+        if "epoch" in stripped and "prn" in stripped:
+            continue
 
-    series = _pd.Series(line_list)
-    series = series[~series.str.contains(r"epoch\s+prn", regex=True, na=False)]
-    if series.empty:
-        return _pd.DataFrame(columns=[
-            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
-            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
-        ])
+        tokens = stripped.split()
+        if len(tokens) < 6 or tokens[1] != "GPST":
+            continue
 
-    base = series.str.extract(
-        r"""
-        ^\s*PDE-CS\s+GPST\s+
-        (?:(?P<mode>TRIP|DUAL)\s+)?
-        (?P<datetime>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
-        (?P<sat>\S+)\s+
-        (?P<el>-?\d+(?:\.\d+)?)\s+
-        (?P<rest>.*)$
-        """,
-        flags=_re.VERBOSE,
-    )
+        idx = 2
+        mode = None
+        if tokens[idx] in {"TRIP", "DUAL"}:
+            mode = tokens[idx]
+            idx += 1
 
-    base = base.dropna(subset=["datetime", "sat", "el"])
+        if idx + 2 >= len(tokens):
+            continue
+        date_token = tokens[idx]
+        time_token = tokens[idx + 1]
+        idx += 2
 
-    if base.empty:
-        return _pd.DataFrame(columns=[
-            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
-            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
-        ])
+        if idx >= len(tokens):
+            continue
+        sat = tokens[idx]
+        idx += 1
 
-    metrics = base.pop("rest").fillna("")
-    base["datetime"] = _pd.to_datetime(base["datetime"], errors="coerce")
-    base["el"] = _pd.to_numeric(base["el"], errors="coerce")
-    base = base.dropna(subset=["datetime"])
+        if idx >= len(tokens):
+            continue
+        el_val = _token_to_float(tokens[idx])
+        idx += 1
 
-    flag_series = metrics.str.extract(
-        r"--\s*(?P<flag>low_elevation|single\s+frequency)\s*--",
-        flags=_re.IGNORECASE,
-    )
-    base["flag"] = (
-        flag_series["flag"]
-        .str.lower()
-        .str.replace(r"\s+", "_", regex=True)
-    )
-    base["flag"] = base["flag"].where(base["flag"].notna(), None)
+        flag = None
+        flag_match = _re.search(r"--\s*([^\-]+?)\s*--", stripped)
+        if flag_match:
+            flag = flag_match.group(1).strip().lower().replace(" ", "_")
 
-    split_metrics = metrics.str.split("vtpv=", n=1, expand=True)
-    metric_values = split_metrics[0].fillna("")
-    tail_values = split_metrics[1].fillna("")
+        values = []
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok.startswith("vtpv=") or tok.startswith("val=") or tok.startswith("thres="):
+                break
+            if tok.startswith("--"):
+                if not flag:
+                    flag = tok.strip("-").replace(" ", "_").lower()
+                idx += 1
+                continue
+            if tok.count("=") == 1:
+                break
+            values.append(_token_to_float(tok))
+            idx += 1
 
-    token_lists = metric_values.str.findall(rf"{FLOAT_TOKEN}")
-    values = _pd.DataFrame(token_lists.tolist(), index=metric_values.index)
-    col_map = ['lamw', 'gf12', 'mw12', 'siggf', 'sigmw', 'lamew', 'gf25', 'mw25']
-    for idx, col in enumerate(col_map):
-        if values is not None and idx in values.columns:
-            src = values[idx]
-        else:
-            src = _pd.Series(_np.nan, index=values.index)
-        base[col] = _pd.to_numeric(src, errors="coerce")
+        values += [_np.nan] * (8 - len(values))
+        values = values[:8]
 
-    base['vtpv'] = _pd.to_numeric(
-        tail_values.str.extract(rf"^\s*(?P<vtpv>{FLOAT_TOKEN})")['vtpv'],
-        errors="coerce",
-    )
-    base['val'] = _pd.to_numeric(
-        tail_values.str.extract(rf"val=\s*(?P<val>{FLOAT_TOKEN})")['val'],
-        errors="coerce",
-    )
-    base['thres'] = _pd.to_numeric(
-        tail_values.str.extract(rf"thres=\s*(?P<thres>{FLOAT_TOKEN})")['thres'],
-        errors="coerce",
-    )
+        vtpv = val = thres = _np.nan
+        n_tokens: list[str] = []
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok.startswith("vtpv="):
+                _, _, rest = tok.partition("=")
+                if rest:
+                    vtpv = _token_to_float(rest)
+                elif idx + 1 < len(tokens):
+                    idx += 1
+                    vtpv = _token_to_float(tokens[idx])
+            elif tok.startswith("val="):
+                _, _, rest = tok.partition("=")
+                if rest:
+                    val = _token_to_float(rest)
+                elif idx + 1 < len(tokens):
+                    idx += 1
+                    val = _token_to_float(tokens[idx])
+            elif tok.startswith("thres="):
+                _, _, rest = tok.partition("=")
+                if rest:
+                    thres = _token_to_float(rest)
+                elif idx + 1 < len(tokens):
+                    idx += 1
+                    thres = _token_to_float(tokens[idx])
+            elif tok.startswith("--"):
+                if not flag:
+                    flag = tok.strip("-").replace(" ", "_").lower()
+            else:
+                n_tokens.append(tok)
+            idx += 1
 
-    post_thres = tail_values.str.extract(rf"thres=\s*{FLOAT_TOKEN}(?P<tail>.*)$")['tail'].fillna("")
-    n_values = post_thres.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")['num'].unstack()
-    for idx, col in enumerate(['N1', 'N2', 'N5']):
-        if idx in n_values.columns:
-            src = n_values[idx]
-        else:
-            src = _pd.Series(_np.nan, index=n_values.index)
-        base[col] = _pd.to_numeric(src, errors="coerce")
+        n_values = [_token_to_float(tok) for tok in n_tokens if tok]
+        n_values += [_np.nan] * (3 - len(n_values))
+        n_values = n_values[:3]
 
-    numeric_cols = [
-        'el', 'lamw', 'gf12', 'mw12', 'siggf', 'sigmw',
-        'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
-    ]
-    base[numeric_cols] = base[numeric_cols].apply(_pd.to_numeric, errors="coerce")
-    base[numeric_cols] = base[numeric_cols].replace([_np.inf, -_np.inf], _np.nan)
-    base[numeric_cols] = base[numeric_cols].astype(float)
-    base['mode'] = base['mode'].where(base['mode'].notna(), None).astype(object)
-    base['sat'] = base['sat'].astype(object)
-    base['flag'] = base['flag'].astype(object)
+        chunk.append(
+            (
+                f"{date_token} {time_token}",
+                sat,
+                mode,
+                flag,
+                _np.float32(el_val),
+                *(_np.float32(v) for v in values),
+                _np.float32(vtpv),
+                _np.float32(val),
+                _np.float32(thres),
+                _np.float32(n_values[0]),
+                _np.float32(n_values[1]),
+                _np.float32(n_values[2]),
+            )
+        )
 
-    result = base[['datetime', 'sat', 'mode', 'flag'] + numeric_cols].dropna(subset=["datetime", "sat"])
-    return result.reset_index(drop=True)
+        if len(chunk) >= chunk_size:
+            flush_chunk()
+
+    flush_chunk()
+
+    if not frames:
+        return _pd.DataFrame(columns=columns)
+
+    df = _pd.concat(frames, ignore_index=True)
+    df = df.dropna(subset=['datetime'])
+    return df[columns].reset_index(drop=True)
 
 
 def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
