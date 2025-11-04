@@ -413,7 +413,7 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         ])
 
     series = _pd.Series(line_list)
-    series = series[~series.str.contains(r"week\s+sec", regex=True, na=False)]
+    series = series[~series.str.contains(r"epoch\s+prn", regex=True, na=False)]
     series = series[~series.str.contains(r"--\s*(?:low_elevation|single frequency)\s*--", regex=True, na=False)]
     if series.empty:
         return _pd.DataFrame(columns=[
@@ -425,14 +425,15 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         r"""
         ^\s*PDE-CS\s+GPST\s+
         (?:(?P<mode>TRIP|DUAL)\s+)?
-        (?P<week>\d+)\s+
-        (?P<sec>\d+(?:\.\d+)?)\s+
+        (?P<datetime>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
         (?P<sat>\S+)\s+
         (?P<el>-?\d+(?:\.\d+)?)\s+
         (?P<rest>.*)$
         """,
         flags=_re.VERBOSE,
-    ).dropna(subset=["week", "sec", "sat", "el"])
+    )
+
+    base = base.dropna(subset=["datetime", "sat", "el"])
 
     if base.empty:
         return _pd.DataFrame(columns=[
@@ -441,6 +442,10 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         ])
 
     metrics = base.pop("rest").fillna("")
+    base["datetime"] = _pd.to_datetime(base["datetime"], errors="coerce")
+    base["el"] = _pd.to_numeric(base["el"], errors="coerce")
+    base = base.dropna(subset=["datetime"])
+
     split_metrics = metrics.str.split("vtpv=", n=1, expand=True)
     metric_values = split_metrics[0].fillna("")
     tail_values = split_metrics[1].fillna("")
@@ -476,13 +481,6 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             src = _pd.Series(_np.nan, index=n_values.index)
         base[col] = _pd.to_numeric(src, errors="coerce")
 
-    base[['week', 'sec', 'el']] = base[['week', 'sec', 'el']].apply(
-        lambda s: _pd.to_numeric(s, errors="coerce")
-    )
-
-    gps_epoch = _pd.Timestamp("1980-01-06")
-    base['datetime'] = gps_epoch + _pd.to_timedelta(base['week'], unit="W") + _pd.to_timedelta(base['sec'], unit="s")
-
     numeric_cols = [
         'el', 'lamw', 'gf12', 'mw12', 'siggf', 'sigmw',
         'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
@@ -490,7 +488,7 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     base[numeric_cols] = base[numeric_cols].apply(_pd.to_numeric, errors="coerce")
     base[numeric_cols] = base[numeric_cols].replace([_np.inf, -_np.inf], _np.nan)
     base[numeric_cols] = base[numeric_cols].astype(float)
-    base['mode'] = base['mode'].astype(object)
+    base['mode'] = base['mode'].where(base['mode'].notna(), None).astype(object)
     base['sat'] = base['sat'].astype(object)
 
     result = base[['datetime', 'sat', 'mode'] + numeric_cols].dropna(subset=["datetime", "sat"])

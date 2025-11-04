@@ -1,6 +1,6 @@
 # Central record of TRACE test data sets to be shared across unit tests
 
-# Sample TRACE file with PDE cycle slip detection & repair section
+# Sample TRACE file with PDE cycle slip detection & repair section (epoch timestamps)
 # Extracted from real TRACE output with various scenarios:
 # - TRIP mode (triple-frequency)
 # - DUAL mode (dual-frequency)
@@ -10,41 +10,41 @@
 trace_pde_cs_sample = b"""
    *-------- PDE cycle slip detection & repair --------*
 
-PDE-CS GPST       week      sec  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
+PDE-CS GPST       epoch                  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
 
-PDE-CS GPST TRIP  2190 518430.0  G18 20.18 0.862  -0.0050 -0.0746   0.0174          5.86  -0.0056 -0.0186      vtpv=     0.4 val=     0.1 thres=  4.10    7    2
-PDE-CS GPST       2190 518430.0  E27  8.80 --low_elevation --
-PDE-CS GPST DUAL  2190 518430.0  G20 36.13 0.862  -0.0042 -0.5642   0.0102                                     vtpv=     1.9 val=     0.6 thres=  5.43    5    2
-PDE-CS GPST DUAL  2190 518430.0  G05 34.78 0.862  -0.0046 -0.2522   0.0105                                     vtpv=     0.3 val=     0.1 thres=  5.43    5    2
-PDE-CS GPST       2190 518430.0  G31  4.49 --low_elevation --
-PDE-CS GPST TRIP  2190 518430.0  E02 58.33 0.751   0.0053  0.2772   0.0071           inf   0.0000     nan      vtpv=     1.0 val=     0.2 thres=  4.10    7    2
-PDE-CS GPST TRIP  2190 518430.0  G25 51.74 0.862  -0.0030 -0.2178   0.0076          5.86   0.0006  0.0142      vtpv=     0.6 val=     0.1 thres=  4.10    7    2
-PDE-CS GPST DUAL  2190 518430.0  G29 40.79 0.862  -0.0009 -0.0186   0.0092                                     vtpv=     0.0 val=     0.0 thres=  5.43    5    2
-PDE-CS GPST DUAL  2190 518430.0  G02 43.34 0.862   0.0087 -0.1644   0.0087                                     vtpv=     1.0 val=     0.3 thres=  5.43    5    2
-PDE-CS GPST TRIP  2190 518430.0  G24 32.11 0.862   0.0250  0.0340   0.0113          5.86   0.0063 -0.0024      vtpv=     7.4 val=     1.5 thres=  4.10    7    2
-PDE-CS GPST       2190 518430.0  R22 21.30 --single frequency--
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  G18 20.18 0.862  -0.0050 -0.0746   0.0174          5.86  -0.0056 -0.0186      vtpv=     0.4 val=     0.1 thres=  4.10    7    2
+PDE-CS GPST       2025-10-05 00:00:30.00  E27  8.80 --low_elevation --
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  G20 36.13 0.862  -0.0042 -0.5642   0.0102                                     vtpv=     1.9 val=     0.6 thres=  5.43    5    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  G05 34.78 0.862  -0.0046 -0.2522   0.0105                                     vtpv=     0.3 val=     0.1 thres=  5.43    5    2
+PDE-CS GPST       2025-10-05 00:00:30.00  G31  4.49 --low_elevation --
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  E02 58.33 0.751   0.0053  0.2772   0.0071           inf   0.0000     nan      vtpv=     1.0 val=     0.2 thres=  4.10    7    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  G25 51.74 0.862  -0.0030 -0.2178   0.0076          5.86   0.0006  0.0142      vtpv=     0.6 val=     0.1 thres=  4.10    7    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  G29 40.79 0.862  -0.0009 -0.0186   0.0092                                     vtpv=     0.0 val=     0.0 thres=  5.43    5    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  G02 43.34 0.862   0.0087 -0.1644   0.0087                                     vtpv=     1.0 val=     0.3 thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  G24 32.11 0.862   0.0250  0.0340   0.0113          5.86   0.0063 -0.0024      vtpv=     7.4 val=     1.5 thres=  4.10    7    2
+PDE-CS GPST       2025-10-05 00:00:30.00  R22 21.30 --single frequency--
 
-PDE-CS GPST DUAL  2190 518430.0  G12 66.48 0.862   0.0056 -0.0860   0.0065                                     vtpv=     1.0 val=     0.3 thres=  5.43    5    2
-PDE-CS GPST TRIP  2190 518430.0  E15 45.88 0.751  -0.0047 -0.1934   0.0084           inf   0.0000     nan      vtpv=     0.6 val=     0.1 thres=  4.10    7    2
-PDE-CS GPST       2190 518430.0  E25 10.77 --low_elevation --
-PDE-CS GPST DUAL  2190 518430.0  R11 40.64 0.842  -0.0139  0.0947   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
-PDE-CS GPST TRIP  2190 518430.0  E30 60.88 0.751  -0.0015 -0.0691   0.0069           inf   0.0000     nan      vtpv=     0.1 val=     0.0 thres=  4.10    7    2
-PDE-CS GPST DUAL  2190 518430.0  R21 54.08 0.841  -0.0029 -0.0481   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
-PDE-CS GPST TRIP  2190 518430.0  E18 32.26 0.751   0.0098  0.2184   0.0112           inf   0.0000     nan      vtpv=     1.0 val=     0.2 thres=  4.10    7    2
-PDE-CS GPST TRIP  2190 518430.0  E36 22.88 0.751   0.0169 -0.2148   0.0154           inf   0.0000     nan      vtpv=     1.6 val=     0.3 thres=  4.10    7    2
-PDE-CS GPST TRIP  2190 518430.0  G11 35.23 0.862   0.0098  0.0367   0.0104          5.86   0.0053  0.0471      vtpv=     2.0 val=     0.4 thres=  4.10    7    2
-PDE-CS GPST DUAL  2190 518430.0  R20 30.68 0.842   0.0147 -0.0777   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
-PDE-CS GPST DUAL  2190 518430.0  R09 28.41 0.843   0.0359 -0.1926   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
-PDE-CS GPST       2190 518430.0  R10 79.95 --single frequency--
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  G12 66.48 0.862   0.0056 -0.0860   0.0065                                     vtpv=     1.0 val=     0.3 thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  E15 45.88 0.751  -0.0047 -0.1934   0.0084           inf   0.0000     nan      vtpv=     0.6 val=     0.1 thres=  4.10    7    2
+PDE-CS GPST       2025-10-05 00:00:30.00  E25 10.77 --low_elevation --
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  R11 40.64 0.842  -0.0139  0.0947   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  E30 60.88 0.751  -0.0015 -0.0691   0.0069           inf   0.0000     nan      vtpv=     0.1 val=     0.0 thres=  4.10    7    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  R21 54.08 0.841  -0.0029 -0.0481   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  E18 32.26 0.751   0.0098  0.2184   0.0112           inf   0.0000     nan      vtpv=     1.0 val=     0.2 thres=  4.10    7    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  E36 22.88 0.751   0.0169 -0.2148   0.0154           inf   0.0000     nan      vtpv=     1.6 val=     0.3 thres=  4.10    7    2
+PDE-CS GPST TRIP  2025-10-05 00:00:30.00  G11 35.23 0.862   0.0098  0.0367   0.0104          5.86   0.0053  0.0471      vtpv=     2.0 val=     0.4 thres=  4.10    7    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  R20 30.68 0.842   0.0147 -0.0777   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
+PDE-CS GPST DUAL  2025-10-05 00:00:30.00  R09 28.41 0.843   0.0359 -0.1926   0.0000                                     vtpv=    -nan val=    -nan thres=  5.43    5    2
+PDE-CS GPST       2025-10-05 00:00:30.00  R10 79.95 --single frequency--
 
    *-------- PDE cycle slip detection & repair --------*
 
-PDE-CS GPST       week      sec  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
+PDE-CS GPST       epoch                  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
 
-PDE-CS GPST TRIP  2190 518460.0  G18 20.37 0.862  -0.0112  0.1482   0.0172          5.86  -0.0014 -0.0179      vtpv=     0.2 val=     0.0 thres=  4.10    7    2
-PDE-CS GPST       2190 518460.0  E27  8.94 --low_elevation --
-PDE-CS GPST DUAL  2190 518460.0  G20 36.15 0.862  -0.0005  0.1254   0.0102                                     vtpv=     1.4 val=     0.5 thres=  5.43    5    2
-PDE-CS GPST DUAL  2190 518460.0  G05 34.92 0.862  -0.0037  0.0210   0.0105                                     vtpv=     0.0 val=     0.0 thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:01:00.00  G18 20.37 0.862  -0.0112  0.1482   0.0172          5.86  -0.0014 -0.0179      vtpv=     0.2 val=     0.0 thres=  4.10    7    2
+PDE-CS GPST       2025-10-05 00:01:00.00  E27  8.94 --low_elevation --
+PDE-CS GPST DUAL  2025-10-05 00:01:00.00  G20 36.15 0.862  -0.0005  0.1254   0.0102                                     vtpv=     1.4 val=     0.5 thres=  5.43    5    2
+PDE-CS GPST DUAL  2025-10-05 00:01:00.00  G05 34.92 0.862  -0.0037  0.0210   0.0105                                     vtpv=     0.0 val=     0.0 thres=  5.43    5    2
 
    *-------- PDE cycle slip detection & repair --------*
 
@@ -56,10 +56,10 @@ detslp_gf: sat=G02 gf0=9.597363 gf1=9.595546
 detslp_gf: sat=G06 gf0=4.765946 gf1=4.761807
 detslp_gf: sat=G20 gf0=1.234567 gf1=1.234890
 
-PDE-CS GPST       week      sec  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
+PDE-CS GPST       epoch                  prn   el   lamw     gf12    mw12    siggf  sigmw  lamew     gf25    mw25               LC                   N1   N2   N5
 
-PDE-CS GPST DUAL  2190 518490.0  G20 36.20 0.862  -0.0020  0.2000   0.0100                                     vtpv=     1.5 val=     0.5 thres=  5.43    5    2
-PDE-CS GPST TRIP  2190 518490.0  G02 40.10 0.862  -0.0030  0.1500   0.0095          5.86  -0.0010 -0.0150      vtpv=     0.8 val=     0.2 thres=  4.10    7    2
+PDE-CS GPST DUAL  2025-10-05 00:01:30.00  G20 36.20 0.862  -0.0020  0.2000   0.0100                                     vtpv=     1.5 val=     0.5 thres=  5.43    5    2
+PDE-CS GPST TRIP  2025-10-05 00:01:30.00  G02 40.10 0.862  -0.0030  0.1500   0.0095          5.86  -0.0010 -0.0150      vtpv=     0.8 val=     0.2 thres=  4.10    7    2
 """
 
 # Empty TRACE file without PDE-CS section
@@ -116,7 +116,7 @@ trace_no_lc = b"""
 Some state data here
 -STATES
    *-------- PDE cycle slip detection & repair --------*
-PDE-CS GPST       week      sec  prn   el   lamw     gf12    mw12
+PDE-CS GPST       epoch                  prn   el   lamw     gf12    mw12
 -RESIDUALS
 """
 
