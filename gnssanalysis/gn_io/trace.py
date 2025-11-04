@@ -321,7 +321,7 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
         )
 
-    series = _pd.Series(line_list, dtype="string")
+    series = _pd.Series(line_list)
 
     extracted = series.str.extract(
         r"""
@@ -355,9 +355,13 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
     df["value"] = df["value"].replace([_np.inf, -_np.inf], _np.nan)
     df = df.dropna(subset=["datetime"])
 
-    return df.reset_index(drop=True)[
+    df = df.reset_index(drop=True)[
         ['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
     ]
+    for col in ['sat', 'combo_type', 'code_type', 'combo_label']:
+        df[col] = df[col].astype(object)
+    df['value'] = df['value'].astype(float)
+    return df
 
 
 def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
@@ -408,7 +412,7 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
         ])
 
-    series = _pd.Series(line_list, dtype="string")
+    series = _pd.Series(line_list)
     series = series[~series.str.contains(r"week\s+sec", regex=True, na=False)]
     series = series[~series.str.contains(r"--\s*(?:low_elevation|single frequency)\s*--", regex=True, na=False)]
     if series.empty:
@@ -441,13 +445,13 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     metric_values = split_metrics[0].fillna("")
     tail_values = split_metrics[1].fillna("")
 
-    values = metric_values.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")["num"].unstack(fill_value=_pd.NA)
+    values = metric_values.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")["num"].unstack()
     col_map = ['lamw', 'gf12', 'mw12', 'siggf', 'sigmw', 'lamew', 'gf25', 'mw25']
     for idx, col in enumerate(col_map):
         if idx in values.columns:
             src = values[idx]
         else:
-            src = _pd.Series(_pd.NA, index=values.index)
+            src = _pd.Series(_np.nan, index=values.index)
         base[col] = _pd.to_numeric(src, errors="coerce")
 
     base['vtpv'] = _pd.to_numeric(
@@ -464,12 +468,12 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     )
 
     post_thres = tail_values.str.extract(rf"thres=\s*{FLOAT_TOKEN}(?P<tail>.*)$")['tail'].fillna("")
-    n_values = post_thres.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")['num'].unstack(fill_value=_pd.NA)
+    n_values = post_thres.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")['num'].unstack()
     for idx, col in enumerate(['N1', 'N2', 'N5']):
         if idx in n_values.columns:
             src = n_values[idx]
         else:
-            src = _pd.Series(_pd.NA, index=n_values.index)
+            src = _pd.Series(_np.nan, index=n_values.index)
         base[col] = _pd.to_numeric(src, errors="coerce")
 
     base[['week', 'sec', 'el']] = base[['week', 'sec', 'el']].apply(
@@ -485,6 +489,9 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     ]
     base[numeric_cols] = base[numeric_cols].apply(_pd.to_numeric, errors="coerce")
     base[numeric_cols] = base[numeric_cols].replace([_np.inf, -_np.inf], _np.nan)
+    base[numeric_cols] = base[numeric_cols].astype(float)
+    base['mode'] = base['mode'].astype(object)
+    base['sat'] = base['sat'].astype(object)
 
     result = base[['datetime', 'sat', 'mode'] + numeric_cols].dropna(subset=["datetime", "sat"])
     return result.reset_index(drop=True)
