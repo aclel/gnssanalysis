@@ -778,6 +778,19 @@ def parse_residuals(
                                 df_indexed[col].notna(), aligned[col]
                             )
                 df = df_indexed.reset_index()
+        elif trace_type == "smoothed" and smoothed_iteration is None:
+            merge_df = forward_group_merge.get(group_key)
+            if merge_df is not None and not merge_df.empty:
+                df_indexed = df.set_index(key_columns)
+                aligned = merge_df.reindex(df_indexed.index)
+                for col in df_indexed.columns:
+                    if col in {"prefit", "postfit", "iter"}:
+                        continue
+                    if col in aligned.columns:
+                        mask = df_indexed[col].isna()
+                        if mask.any():
+                            df_indexed.loc[mask, col] = aligned.loc[mask, col]
+                df = df_indexed.reset_index()
         elif trace_type == "forward" and forward_keep_last:
             df = keep_last_iteration(df)
 

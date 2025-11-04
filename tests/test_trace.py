@@ -499,8 +499,8 @@ class TestParseResiduals(unittest.TestCase):
     SMOOTHED_TRACE = textwrap.dedent(
         """
         +RESIDUALS/PPP
-        % -1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.3000  0.0200 0.3000 P-L1C
-        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  1.7000  0.0000 0.0200 L-L1W
+        % -1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.3000  0.0200 nan P-L1C
+        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  1.7000  0.0000 nan L-L1W
         -RESIDUALS/PPP
         """
     ).strip()
@@ -526,6 +526,7 @@ class TestParseResiduals(unittest.TestCase):
             self.assertTrue((df["trace_type"] == "smoothed").all())
             self.assertTrue((df["iter"] == -1).all())
             self.assertSetEqual(set(df["recv"]), {"STAT", "OTHR"})
+            self.assertFalse(df["sigma"].isna().any(), "Sigma should be merged from forward residuals")
 
     def test_forward_only_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
