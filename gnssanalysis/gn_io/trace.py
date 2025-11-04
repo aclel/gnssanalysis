@@ -4,7 +4,8 @@ import logging as _logging
 import os as _os
 import re as _re
 from io import BytesIO as _BytesIO
-from typing import Iterable as _Iterable
+from pathlib import Path as _Path
+from typing import Iterable as _Iterable, Optional as _Optional
 import warnings as _warnings
 
 import pandas as _pd
@@ -77,7 +78,7 @@ def _to_float_or_nan(x: str) -> float:
         return float("nan")
 
 
-def parse_trace_lines(lines: _Iterable[str]) -> _pd.DataFrame:
+def parse_residual_lines(lines: _Iterable[str]) -> _pd.DataFrame:
     """
     Parse residual lines (starting with '%') from Network TRACE files.
 
@@ -114,7 +115,7 @@ def parse_trace_lines(lines: _Iterable[str]) -> _pd.DataFrame:
     Examples
     --------
     >>> with open("trace.SUM") as f:
-    ...     df = parse_trace_lines(f)
+    ...     df = parse_residual_lines(f)
     >>> df = keep_last_iteration(df)  # Keep only final iteration
     """
     records = []
@@ -548,7 +549,7 @@ def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame from parse_trace_lines() with 'iter' column
+        DataFrame from parse_residual_lines() with 'iter' column
 
     Returns
     -------
@@ -557,7 +558,7 @@ def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
 
     Examples
     --------
-    >>> df = parse_trace_lines(open("trace.SUM"))
+    >>> df = parse_residual_lines(open("trace.SUM"))
     >>> df = keep_last_iteration(df)  # Keep only final iteration
     """
     if df.empty:
@@ -569,6 +570,165 @@ def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
           .sort_values(["datetime", "sat", "sig"])
           .reset_index(drop=True)
     )
+
+
+def parse_residuals(
+    paths: _Iterable[_Path],
+    strategy: str = "auto",
+    forward_keep_last: bool = True,
+    smoothed_iteration: _Optional[int] = -1,
+    include_source: bool = False,
+) -> _pd.DataFrame:
+    """
+    Parse residual observations from a collection of network TRACE files.
+
+    Parameters
+    ----------
+    paths : Iterable[pathlib.Path | str]
+        Collection of TRACE files (forward and/or smoothed). Files are grouped by
+        their base name (with the ``_smoothed`` suffix removed) so that forward and
+        smoothed pairs can be resolved automatically.
+    strategy : {"auto", "smoothed", "forward", "both"}, default "auto"
+        Selection strategy for choosing between smoothed and forward residuals.
+        - "auto": prefer smoothed residuals, fall back to forward when smoothed missing.
+        - "smoothed": use smoothed residuals, fall back to forward with a warning.
+        - "forward": use forward residuals, fall back to smoothed with a warning.
+        - "both": include both smoothed and forward residuals.
+    forward_keep_last : bool, default True
+        When consuming forward traces, keep only the last iteration per observation
+        (via :func:`keep_last_iteration`). Set to False to retain all iterations.
+    smoothed_iteration : int | None, default -1
+        Iteration to keep from smoothed traces. Use None to keep every iteration.
+    include_source : bool, default False
+        When True, append a ``source_path`` column with the file each record came from.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Residual observations including a ``trace_type`` column that records whether
+        the data came from a smoothed or forward TRACE file. Additional columns match
+        :func:`parse_residual_lines`.
+    """
+
+    strategy = strategy.lower()
+    valid_strategies = {"auto", "smoothed", "forward", "both"}
+    if strategy not in valid_strategies:
+        raise ValueError(
+            f"Invalid strategy '{strategy}'. Expected one of {sorted(valid_strategies)}."
+        )
+
+    paths = list(paths or [])
+    base_columns = [
+        "iter",
+        "date",
+        "time",
+        "meas",
+        "sat",
+        "recv",
+        "sig",
+        "prefit",
+        "postfit",
+        "sigma",
+        "label",
+        "prefit_ratio",
+        "postfit_ratio",
+        "datetime",
+        "trace_type",
+    ]
+    if include_source:
+        base_columns.append("source_path")
+
+    if not paths:
+        return _pd.DataFrame(columns=base_columns)
+
+    grouped = {}
+    for raw in paths:
+        path = _Path(raw)
+        if not path.exists():
+            _warnings.warn(f"TRACE residual file not found: {path}", RuntimeWarning, stacklevel=2)
+            continue
+
+        stem_lower = path.stem.lower()
+        is_smoothed = "_smoothed" in stem_lower
+        base_stem = path.stem.replace("_smoothed", "")
+        key = (base_stem, path.parent)
+        entry = grouped.setdefault(key, {"smoothed": [], "forward": []})
+        entry["smoothed" if is_smoothed else "forward"].append(path)
+
+    selected: list[tuple[_Path, str]] = []
+    for (base_stem, parent), entry in grouped.items():
+        smoothed_files = entry["smoothed"]
+        forward_files = entry["forward"]
+
+        def _warn_fallback(missing: str) -> None:
+            available = "forward" if missing == "smoothed" else "smoothed"
+            if entry[available]:
+                msg = (
+                    f"No {missing} residuals found for '{base_stem}' in {parent}; "
+                    f"using {available} residuals instead."
+                )
+                _warnings.warn(msg, RuntimeWarning, stacklevel=2)
+
+        if strategy == "auto":
+            if smoothed_files:
+                selected.extend((path, "smoothed") for path in smoothed_files)
+            elif forward_files:
+                selected.extend((path, "forward") for path in forward_files)
+        elif strategy == "smoothed":
+            if smoothed_files:
+                selected.extend((path, "smoothed") for path in smoothed_files)
+            elif forward_files:
+                _warn_fallback("smoothed")
+                selected.extend((path, "forward") for path in forward_files)
+        elif strategy == "forward":
+            if forward_files:
+                selected.extend((path, "forward") for path in forward_files)
+            elif smoothed_files:
+                _warn_fallback("forward")
+                selected.extend((path, "smoothed") for path in smoothed_files)
+        elif strategy == "both":
+            selected.extend((path, "smoothed") for path in smoothed_files)
+            selected.extend((path, "forward") for path in forward_files)
+
+    frames = []
+    for path, trace_type in selected:
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as fh:
+                df = parse_residual_lines(fh)
+        except Exception as exc:
+            _warnings.warn(f"Failed to parse residuals from {path}: {exc}", RuntimeWarning, stacklevel=2)
+            continue
+
+        if df.empty:
+            continue
+
+        if trace_type == "smoothed" and smoothed_iteration is not None:
+            df = df[df["iter"] == smoothed_iteration]
+        elif trace_type == "forward" and forward_keep_last:
+            df = keep_last_iteration(df)
+
+        if df.empty:
+            continue
+
+        df = df.copy()
+        df["trace_type"] = trace_type
+        if include_source:
+            df["source_path"] = str(path)
+        frames.append(df.reset_index(drop=True))
+
+    if not frames:
+        return _pd.DataFrame(columns=base_columns)
+
+    result = _pd.concat(frames, ignore_index=True)
+
+    # Ensure expected columns exist even if ratios were absent from the inputs
+    for col in base_columns:
+        if col not in result.columns:
+            result[col] = _pd.NA
+
+    result = result[base_columns]
+    result = result.sort_values(["datetime", "sat", "recv", "sig", "trace_type"]).reset_index(drop=True)
+    return result
 
 
 # ============================================================================

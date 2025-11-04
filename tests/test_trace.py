@@ -1,11 +1,15 @@
+import tempfile
 import unittest
+from pathlib import Path
+import textwrap
 import pandas as pd
 import numpy as np
 
 from gnssanalysis.gn_io.trace import (
     parse_pde_cs,
     parse_lc,
-    parse_trace_lines,
+    parse_residuals,
+    parse_residual_lines,
     parse_large_errors,
     parse_ambiguity_resets,
     parse_elevation,
@@ -478,12 +482,133 @@ class TestParseLc(unittest.TestCase):
         self.assertEqual(len(df), 0, "Should return empty DataFrame for no LC data")
 
 
-class TestParseTraceLines(unittest.TestCase):
-    """Tests for parse_trace_lines function"""
+class TestParseResiduals(unittest.TestCase):
+    """Tests for parse_residuals helper"""
 
-    def test_parse_trace_lines_basic(self):
+    FORWARD_TRACE = textwrap.dedent(
+        """
+        Network header line
+        +RESIDUALS/PPP
+        %  0 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -1.2300  0.1000 0.5000 P-L1C
+        %  1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.8000  0.0500 0.4000 P-L1C
+        %  0 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  2.0000  0.0000 0.0200 L-L1W
+        -RESIDUALS/PPP
+        """
+    ).strip()
+
+    SMOOTHED_TRACE = textwrap.dedent(
+        """
+        +RESIDUALS/PPP
+        % -1 2025-10-05 00:00:00.00 CODE_MEAS G01 STAT L1C -0.3000  0.0200 0.3000 P-L1C
+        % -1 2025-10-05 00:00:30.00 PHAS_MEAS G02 OTHR L1W  1.7000  0.0000 0.0200 L-L1W
+        -RESIDUALS/PPP
+        """
+    ).strip()
+
+    def _write_trace(self, directory: Path, name: str, content: str) -> Path:
+        path = directory / name
+        path.write_text(content)
+        return path
+
+    def test_prefers_smoothed_when_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE
+            )
+            smoothed_path = self._write_trace(
+                tmpdir_path, "Network_TEST_smoothed.TRACE", self.SMOOTHED_TRACE
+            )
+
+            df = parse_residuals([forward_path, smoothed_path])
+
+            self.assertEqual(len(df), 2, "Should select smoothed residuals when available")
+            self.assertTrue((df["trace_type"] == "smoothed").all())
+            self.assertTrue((df["iter"] == -1).all())
+            self.assertSetEqual(set(df["recv"]), {"STAT", "OTHR"})
+
+    def test_forward_only_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE
+            )
+
+            df = parse_residuals([forward_path], strategy="auto")
+
+            self.assertEqual(len(df), 2, "Forward residuals should be returned when smoothed missing")
+            self.assertSetEqual(set(df["trace_type"]), {"forward"})
+            self.assertIn(1, set(df["iter"]))
+            self.assertNotIn(-1, set(df["iter"]))
+
+    def test_forward_keep_all_iterations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE
+            )
+
+            df = parse_residuals(
+                [forward_path],
+                strategy="forward",
+                forward_keep_last=False,
+            )
+
+            self.assertEqual(len(df), 3, "All forward iterations should be retained")
+            stat_iters = sorted(df[df["recv"] == "STAT"]["iter"].tolist())
+            self.assertEqual(stat_iters, [0, 1])
+
+    def test_include_source_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE
+            )
+            smoothed_path = self._write_trace(
+                tmpdir_path, "Network_TEST_smoothed.TRACE", self.SMOOTHED_TRACE
+            )
+
+            df = parse_residuals(
+                [forward_path, smoothed_path],
+                include_source=True,
+            )
+
+            self.assertIn("source_path", df.columns)
+            self.assertTrue(
+                df["source_path"].str.endswith("Network_TEST_smoothed.TRACE").all()
+            )
+
+    def test_strategy_both(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            forward_path = self._write_trace(
+                tmpdir_path, "Network_TEST.TRACE", self.FORWARD_TRACE
+            )
+            smoothed_path = self._write_trace(
+                tmpdir_path, "Network_TEST_smoothed.TRACE", self.SMOOTHED_TRACE
+            )
+
+            df = parse_residuals(
+                [forward_path, smoothed_path],
+                strategy="both",
+            )
+
+            self.assertEqual(len(df), 4, "Both forward and smoothed residuals should be returned")
+            self.assertSetEqual(set(df["trace_type"]), {"forward", "smoothed"})
+
+    def test_empty_input(self):
+        df = parse_residuals([])
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 0)
+        self.assertIn("trace_type", df.columns)
+
+
+class TestParseResidualLines(unittest.TestCase):
+    """Tests for parse_residual_lines function"""
+
+    def test_parse_residual_lines_basic(self):
         """Test basic reading of residual lines"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         # Check that we got a DataFrame
         self.assertIsInstance(df, pd.DataFrame)
@@ -509,9 +634,9 @@ class TestParseTraceLines(unittest.TestCase):
         for col in expected_columns:
             self.assertIn(col, df.columns, f"Expected column '{col}' not found")
 
-    def test_parse_trace_lines_column_types(self):
+    def test_parse_residual_lines_column_types(self):
         """Test that columns have the correct data types"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         # datetime should be datetime64
         self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
@@ -529,26 +654,26 @@ class TestParseTraceLines(unittest.TestCase):
                 f"Column '{col}' should be float",
             )
 
-    def test_parse_trace_lines_negative_iteration(self):
+    def test_parse_residual_lines_negative_iteration(self):
         """Test handling of negative iteration numbers (smoothed files)"""
         lines = [
             "% -1 2025-10-05 00:01:00.00 PHAS_MEAS G01 ALIC L1C -0.0234 0.0012 0.0500 LARGE",
             "% -1 2025-10-05 00:01:00.00 CODE_MEAS G01 ALIC L1C -0.1200 0.0110 0.5000 LARGE",
         ]
-        df = parse_trace_lines(lines)
+        df = parse_residual_lines(lines)
 
         self.assertEqual(len(df), 2)
         self.assertTrue((df["iter"] == -1).all())
         self.assertTrue(df["prefit_ratio"].isna().all())
         self.assertTrue(df["postfit_ratio"].isna().all())
 
-    def test_parse_trace_lines_with_ratios(self):
+    def test_parse_residual_lines_with_ratios(self):
         """Test parsing of 14-field format with prefit_ratio and postfit_ratio"""
         lines = [
             "% 1 2025-10-05 00:02:00.00 PHAS_MEAS G01 ALIC L1C -0.0234 0.0012 0.0500 1.25 0.75 OK",
             "% 1 2025-10-05 00:02:00.00 CODE_MEAS G01 ALIC L1C -0.1200 0.0110 0.5000 2.50 0.90 OK",
         ]
-        df = parse_trace_lines(lines)
+        df = parse_residual_lines(lines)
 
         self.assertEqual(len(df), 2)
         self.assertTrue((df["iter"] == 1).all())
@@ -556,14 +681,14 @@ class TestParseTraceLines(unittest.TestCase):
         self.assertTrue((df["postfit_ratio"] > 0).all())
 
         # Dataset fixture does not include ratio values, but should still expose the columns
-        fixture_df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        fixture_df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
         self.assertIn("prefit_ratio", fixture_df.columns)
         self.assertTrue(fixture_df["prefit_ratio"].isna().all())
         self.assertTrue(fixture_df["postfit_ratio"].isna().all())
 
-    def test_parse_trace_lines_without_ratios(self):
+    def test_parse_residual_lines_without_ratios(self):
         """Test parsing of 12-field format without ratios"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         # Negative iterations don't have ratios
         neg_iter = df[df["iter"] < 0]
@@ -573,27 +698,27 @@ class TestParseTraceLines(unittest.TestCase):
                 "Negative iterations should not have ratios",
             )
 
-    def test_parse_trace_lines_measurements(self):
+    def test_parse_residual_lines_measurements(self):
         """Test that measurement types are correctly parsed"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         # Should have PHAS_MEAS and CODE_MEAS
         meas_types = df["meas"].unique()
         self.assertIn("PHAS_MEAS", meas_types, "Should have phase measurements")
         self.assertIn("CODE_MEAS", meas_types, "Should have code measurements")
 
-    def test_parse_trace_lines_receivers(self):
+    def test_parse_residual_lines_receivers(self):
         """Test that receivers are correctly parsed"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         receivers = df["recv"].unique()
         self.assertGreater(len(receivers), 0, "Residuals should include at least one receiver")
         for recv in receivers:
             self.assertRegex(recv, r"^[A-Z0-9]{4}$", f"Unexpected receiver format: {recv}")
 
-    def test_parse_trace_lines_labels(self):
+    def test_parse_residual_lines_labels(self):
         """Test that labels are correctly parsed"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         labels = df["label"].unique()
         self.assertGreater(len(labels), 0, "Should expose residual labels")
@@ -604,9 +729,9 @@ class TestParseTraceLines(unittest.TestCase):
                 f"Unexpected residual label format: {label}",
             )
 
-    def test_parse_trace_lines_specific_record(self):
+    def test_parse_residual_lines_specific_record(self):
         """Test parsing of a specific record"""
-        df = parse_trace_lines(trace_residual_lines_sample.decode().splitlines())
+        df = parse_residual_lines(trace_residual_lines_sample.decode().splitlines())
 
         # Find G06 ALIC L1W phase measurement
         record = df[
