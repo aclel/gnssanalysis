@@ -39,6 +39,7 @@ class TestParsePdeCs(unittest.TestCase):
             "datetime",
             "sat",
             "mode",
+            "flag",
             "el",
             "lamw",
             "gf12",
@@ -70,6 +71,9 @@ class TestParsePdeCs(unittest.TestCase):
 
         # mode should be object (string or None)
         self.assertEqual(df["mode"].dtype, object)
+
+        # flag should be object (string or None)
+        self.assertEqual(df["flag"].dtype, object)
 
         # Numeric columns should be float
         numeric_cols = [
@@ -217,14 +221,48 @@ class TestParsePdeCs(unittest.TestCase):
                 f"{col} should remain NaN for DUAL mode records",
             )
 
-    def test_parse_pde_cs_skips_flagged_records(self):
-        """Ensure low elevation and single-frequency PRNs are ignored"""
+    def test_parse_pde_cs_flagged_records(self):
+        """Ensure low elevation and single-frequency PRNs are retained with flags"""
         df = parse_pde_cs(trace_pde_cs_sample.decode().splitlines())
 
-        skipped_prns = {"E27", "G31", "R22", "E25", "R10"}
-        present = set(df["sat"])
-        for prn in skipped_prns:
-            self.assertNotIn(prn, present, f"{prn} should be skipped from parsing")
+        flagged = df[df["flag"].notna()]
+        self.assertGreater(len(flagged), 0, "Expected flagged PDE-CS records")
+
+        expected_flags = {"low_elevation", "single_frequency"}
+        self.assertTrue(
+            set(flagged["flag"]).issubset(expected_flags),
+            "Unexpected flag values present",
+        )
+
+        flagged_prns = {"E27", "G31", "R22", "E25", "R10"}
+        for prn in flagged_prns:
+            self.assertGreater(
+                len(flagged[flagged["sat"] == prn]),
+                0,
+                f"{prn} should appear as a flagged record",
+            )
+
+        numeric_cols = [
+            "lamw",
+            "gf12",
+            "mw12",
+            "siggf",
+            "sigmw",
+            "lamew",
+            "gf25",
+            "mw25",
+            "vtpv",
+            "val",
+            "thres",
+            "N1",
+            "N2",
+            "N5",
+        ]
+        flagged_numeric = flagged[numeric_cols]
+        self.assertTrue(
+            flagged_numeric.isna().all().all(),
+            "Flagged records should have NaN metric values",
+        )
 
     def test_parse_pde_cs_specific_satellite(self):
         """Test parsing of a specific satellite record"""

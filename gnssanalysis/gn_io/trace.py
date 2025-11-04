@@ -414,7 +414,6 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
 
     series = _pd.Series(line_list)
     series = series[~series.str.contains(r"epoch\s+prn", regex=True, na=False)]
-    series = series[~series.str.contains(r"--\s*(?:low_elevation|single frequency)\s*--", regex=True, na=False)]
     if series.empty:
         return _pd.DataFrame(columns=[
             'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
@@ -446,14 +445,26 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     base["el"] = _pd.to_numeric(base["el"], errors="coerce")
     base = base.dropna(subset=["datetime"])
 
+    flag_series = metrics.str.extract(
+        r"--\s*(?P<flag>low_elevation|single\s+frequency)\s*--",
+        flags=_re.IGNORECASE,
+    )
+    base["flag"] = (
+        flag_series["flag"]
+        .str.lower()
+        .str.replace(r"\s+", "_", regex=True)
+    )
+    base["flag"] = base["flag"].where(base["flag"].notna(), None)
+
     split_metrics = metrics.str.split("vtpv=", n=1, expand=True)
     metric_values = split_metrics[0].fillna("")
     tail_values = split_metrics[1].fillna("")
 
-    values = metric_values.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")["num"].unstack()
+    token_lists = metric_values.str.findall(rf"{FLOAT_TOKEN}")
+    values = _pd.DataFrame(token_lists.tolist(), index=metric_values.index)
     col_map = ['lamw', 'gf12', 'mw12', 'siggf', 'sigmw', 'lamew', 'gf25', 'mw25']
     for idx, col in enumerate(col_map):
-        if idx in values.columns:
+        if values is not None and idx in values.columns:
             src = values[idx]
         else:
             src = _pd.Series(_np.nan, index=values.index)
@@ -490,8 +501,9 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     base[numeric_cols] = base[numeric_cols].astype(float)
     base['mode'] = base['mode'].where(base['mode'].notna(), None).astype(object)
     base['sat'] = base['sat'].astype(object)
+    base['flag'] = base['flag'].astype(object)
 
-    result = base[['datetime', 'sat', 'mode'] + numeric_cols].dropna(subset=["datetime", "sat"])
+    result = base[['datetime', 'sat', 'mode', 'flag'] + numeric_cols].dropna(subset=["datetime", "sat"])
     return result.reset_index(drop=True)
 
 
