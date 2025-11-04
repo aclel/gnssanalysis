@@ -564,6 +564,7 @@ class TestParseResiduals(unittest.TestCase):
             self.assertTrue((df["trace_type"] == "smoothed").all())
             self.assertTrue((df["iter"] == -1).all())
             self.assertSetEqual(set(df["recv"]), {"STAT", "OTHR"})
+            self.assertNotIn("datetime", df.columns)
             code_sigma = df[df["meas"] == "CODE_MEAS"]["sigma"].iloc[0]
             phase_sigma = df[df["meas"] == "PHAS_MEAS"]["sigma"].iloc[0]
             self.assertAlmostEqual(code_sigma, 0.4000, places=4)
@@ -585,8 +586,10 @@ class TestParseResiduals(unittest.TestCase):
             self.assertTrue((df["trace_type"] == "smoothed").all())
             zero_mask = df["prefit"] == 0
             self.assertTrue(zero_mask.any(), "Smoothed results should keep zero prefit")
+            self.assertNotIn("datetime", df.columns)
 
-            sigma_values = df.groupby(["datetime", "sig"])["sigma"].first()
+            timestamps = pd.to_datetime(df["date"] + " " + df["time"])
+            sigma_values = df.assign(timestamp=timestamps).groupby(["timestamp", "sig"])["sigma"].first()
             self.assertAlmostEqual(
                 sigma_values.loc[(pd.Timestamp("2025-10-05 00:00:00"), "L1W")],
                 0.3449291,
@@ -616,6 +619,7 @@ class TestParseResiduals(unittest.TestCase):
             self.assertSetEqual(set(df["trace_type"]), {"forward"})
             self.assertIn(1, set(df["iter"]))
             self.assertNotIn(-1, set(df["iter"]))
+            self.assertNotIn("datetime", df.columns)
 
     def test_forward_keep_all_iterations(self):
         with tempfile.TemporaryDirectory() as tmpdir:

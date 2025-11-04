@@ -807,8 +807,9 @@ def parse_residuals(
         if col not in result.columns:
             result[col] = _pd.NA
 
-    result = result[base_columns]
-    result = result.sort_values(["datetime", "sat", "recv", "sig", "trace_type"]).reset_index(drop=True)
+    display_columns = [col for col in base_columns if col != "datetime"]
+    result = result[display_columns]
+    result = result.sort_values(["date", "time", "sat", "recv", "sig", "trace_type"]).reset_index(drop=True)
     return result
 
 
