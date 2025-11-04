@@ -18,6 +18,8 @@ from .. import gn_io as _gn_io
 
 # Regex patterns for parsing TRACE files
 FLOAT = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+SPECIAL_FLOAT = r"(?:nan|-nan|inf|-inf)"
+FLOAT_TOKEN = rf"(?:{FLOAT}|{SPECIAL_FLOAT})"
 
 # Residual line regex (supports negative iter for smoothed files, and optional ratio fields)
 LINE_RE = _re.compile(
@@ -306,82 +308,56 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
             - value       : float — measurement value
     """
-    records = []
-
-    for line in lines:
-        if not line.strip() or line.startswith('*'):
+    line_list = []
+    for ln in lines:
+        if not isinstance(ln, str):
             continue
-
-        parts = line.split()
-        if len(parts) < 10:
+        stripped = ln.strip()
+        if not stripped or stripped.startswith('*'):
             continue
+        line_list.append(stripped)
+    if not line_list:
+        return _pd.DataFrame(
+            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+        )
 
-        # Parse timestamp (first two elements: date and time)
-        try:
-            timestamp = _pd.to_datetime(f"{parts[0]} {parts[1]}")
-        except:
-            continue
+    series = _pd.Series(line_list, dtype="string")
 
-        # Parse satellite (sat= PRN)
-        if parts[2] != 'sat=' or len(parts) < 4:
-            continue
-        sat = parts[3]
+    extracted = series.str.extract(
+        r"""
+        ^\s*
+        (?P<datetime>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)
+        \s+sat=\s+(?P<sat>\S+)
+        \s+(?P<combo_type>\S+)
+        \s+(?P<code_type>\S+)
+        \s+--\s+(?P<measurements>.+)$
+        """,
+        flags=_re.VERBOSE,
+    ).dropna(subset=["datetime", "sat", "combo_type", "code_type", "measurements"])
 
-        # Parse combo_type and code_type
-        combo_type = parts[4]
-        code_type = parts[5]
+    if extracted.empty:
+        return _pd.DataFrame(
+            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+        )
 
-        # Skip the '--' separator
-        if parts[6] != '--':
-            continue
+    pairs = extracted["measurements"].str.extractall(
+        rf"(?P<combo_label>\w+)\s*=\s*(?P<value>{FLOAT_TOKEN})"
+    )
+    if pairs.empty:
+        return _pd.DataFrame(
+            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+        )
 
-        # Parse the measurements (label = value pairs)
-        # Two formats exist:
-        # 1) label = value (zd, mp): [..., 'L1', '=', '22093585.6788', ...]
-        # 2) label= value (gf, mw, wl, if): [..., 'gf12=', '7.8522', ...]
-        idx = 7
-        while idx < len(parts):
-            # Check if current element ends with '=' (format 2: label=)
-            if idx < len(parts) - 1 and parts[idx].endswith('='):
-                label = parts[idx].rstrip('=')
-                try:
-                    value = float(parts[idx + 1])
-                    records.append({
-                        'datetime': timestamp,
-                        'sat': sat,
-                        'combo_type': combo_type,
-                        'code_type': code_type,
-                        'combo_label': label,
-                        'value': value
-                    })
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 2
-            # Check if next element is '=' (format 1: label = )
-            elif idx < len(parts) - 2 and parts[idx + 1] == '=':
-                label = parts[idx]
-                try:
-                    value = float(parts[idx + 2])
-                    records.append({
-                        'datetime': timestamp,
-                        'sat': sat,
-                        'combo_type': combo_type,
-                        'code_type': code_type,
-                        'combo_label': label,
-                        'value': value
-                    })
-                    idx += 3
-                except (ValueError, IndexError):
-                    idx += 3
-            else:
-                idx += 1
+    pairs = pairs.reset_index(level=-1, drop=True)
+    df = pairs.join(extracted.drop(columns="measurements"))
+    df["datetime"] = _pd.to_datetime(df["datetime"], errors="coerce")
+    df["value"] = _pd.to_numeric(df["value"], errors="coerce")
+    df["value"] = df["value"].replace([_np.inf, -_np.inf], _np.nan)
+    df = df.dropna(subset=["datetime"])
 
-    if not records:
-        return _pd.DataFrame(columns=[
-            'datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value'
-        ])
-
-    return _pd.DataFrame.from_records(records)
+    return df.reset_index(drop=True)[
+        ['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+    ]
 
 
 def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
@@ -419,152 +395,99 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             - N2       : float — ambiguity L2 (cycles)
             - N5       : float — ambiguity L5 (cycles)
     """
-    records = []
-
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 6:  # Minimum: PDE-CS GPST week sec sat el
+    line_list = []
+    for ln in lines:
+        if not isinstance(ln, str):
             continue
-
-        # Only process lines that start with "PDE-CS"
-        if parts[0] != 'PDE-CS':
-            continue
-
-        # Parse base fields
-        idx = 0
-        marker = parts[idx]  # PDE-CS
-        idx += 1
-        timesys = parts[idx]  # GPST
-        idx += 1
-
-        # Check for optional mode (TRIP/DUAL)
-        mode = None
-        if idx < len(parts) and parts[idx] in ['TRIP', 'DUAL']:
-            mode = parts[idx]
-            idx += 1
-
-        # Week and second
-        try:
-            week = int(parts[idx])
-            sec = float(parts[idx + 1])
-            idx += 2
-        except (ValueError, IndexError):
-            continue
-
-        # Convert GPS week/sec to datetime
-        try:
-            # Convert GPS week/sec to datetime (not J2000)
-            gps_epoch = _pd.Timestamp('1980-01-06')  # GPS epoch
-            dt = gps_epoch + _pd.Timedelta(weeks=week, seconds=sec)
-        except:
-            continue
-
-        # Satellite and elevation
-        try:
-            sat = parts[idx]
-            el = float(parts[idx + 1])
-            idx += 2
-        except (ValueError, IndexError):
-            continue
-
-        # Check for special markers
-        if idx < len(parts) and parts[idx].startswith('--'):
-            # Skip lines with --low_elevation--, --single frequency--, etc.
-            continue
-
-        # Parse metrics if available
-        record = {
-            'datetime': dt,
-            'sat': sat,
-            'mode': mode,
-            'el': el,
-            'lamw': _np.nan,
-            'gf12': _np.nan,
-            'mw12': _np.nan,
-            'siggf': _np.nan,
-            'sigmw': _np.nan,
-            'lamew': _np.nan,
-            'gf25': _np.nan,
-            'mw25': _np.nan,
-            'vtpv': _np.nan,
-            'val': _np.nan,
-            'thres': _np.nan,
-            'N1': _np.nan,
-            'N2': _np.nan,
-            'N5': _np.nan,
-        }
-
-        # Try to parse the metric fields (lamw through mw25)
-        try:
-            if idx < len(parts):
-                record['lamw'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['gf12'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['mw12'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['siggf'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['sigmw'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
-                idx += 1
-            if idx < len(parts):
-                record['lamew'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
-                idx += 1
-            if idx < len(parts):
-                record['gf25'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['mw25'] = float(parts[idx]) if parts[idx] not in ['nan', '-nan'] else _np.nan
-                idx += 1
-        except (ValueError, IndexError):
-            pass
-
-        # Parse LC field: vtpv= X val= Y thres= Z
-        while idx < len(parts):
-            if parts[idx].startswith('vtpv='):
-                try:
-                    record['vtpv'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            elif parts[idx].startswith('val='):
-                try:
-                    record['val'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            elif parts[idx].startswith('thres='):
-                try:
-                    record['thres'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            else:
-                # Try parsing as N1, N2, N5 at the end
-                try:
-                    if _np.isnan(record['N1']):
-                        record['N1'] = float(parts[idx])
-                    elif _np.isnan(record['N2']):
-                        record['N2'] = float(parts[idx])
-                    elif _np.isnan(record['N5']):
-                        record['N5'] = float(parts[idx])
-                except ValueError:
-                    pass
-                idx += 1
-
-        records.append(record)
-
-    if not records:
+        stripped = ln.strip()
+        if stripped.startswith("PDE-CS"):
+            line_list.append(stripped)
+    if not line_list:
         return _pd.DataFrame(columns=[
             'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
             'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
         ])
 
-    return _pd.DataFrame.from_records(records)
+    series = _pd.Series(line_list, dtype="string")
+    series = series[~series.str.contains(r"week\s+sec", regex=True, na=False)]
+    series = series[~series.str.contains(r"--\s*(?:low_elevation|single frequency)\s*--", regex=True, na=False)]
+    if series.empty:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
+            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
+        ])
+
+    base = series.str.extract(
+        r"""
+        ^\s*PDE-CS\s+GPST\s+
+        (?:(?P<mode>TRIP|DUAL)\s+)?
+        (?P<week>\d+)\s+
+        (?P<sec>\d+(?:\.\d+)?)\s+
+        (?P<sat>\S+)\s+
+        (?P<el>-?\d+(?:\.\d+)?)\s+
+        (?P<rest>.*)$
+        """,
+        flags=_re.VERBOSE,
+    ).dropna(subset=["week", "sec", "sat", "el"])
+
+    if base.empty:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
+            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
+        ])
+
+    metrics = base.pop("rest").fillna("")
+    split_metrics = metrics.str.split("vtpv=", n=1, expand=True)
+    metric_values = split_metrics[0].fillna("")
+    tail_values = split_metrics[1].fillna("")
+
+    values = metric_values.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")["num"].unstack(fill_value=_pd.NA)
+    col_map = ['lamw', 'gf12', 'mw12', 'siggf', 'sigmw', 'lamew', 'gf25', 'mw25']
+    for idx, col in enumerate(col_map):
+        if idx in values.columns:
+            src = values[idx]
+        else:
+            src = _pd.Series(_pd.NA, index=values.index)
+        base[col] = _pd.to_numeric(src, errors="coerce")
+
+    base['vtpv'] = _pd.to_numeric(
+        tail_values.str.extract(rf"^\s*(?P<vtpv>{FLOAT_TOKEN})")['vtpv'],
+        errors="coerce",
+    )
+    base['val'] = _pd.to_numeric(
+        tail_values.str.extract(rf"val=\s*(?P<val>{FLOAT_TOKEN})")['val'],
+        errors="coerce",
+    )
+    base['thres'] = _pd.to_numeric(
+        tail_values.str.extract(rf"thres=\s*(?P<thres>{FLOAT_TOKEN})")['thres'],
+        errors="coerce",
+    )
+
+    post_thres = tail_values.str.extract(rf"thres=\s*{FLOAT_TOKEN}(?P<tail>.*)$")['tail'].fillna("")
+    n_values = post_thres.str.extractall(rf"(?P<num>{FLOAT_TOKEN})")['num'].unstack(fill_value=_pd.NA)
+    for idx, col in enumerate(['N1', 'N2', 'N5']):
+        if idx in n_values.columns:
+            src = n_values[idx]
+        else:
+            src = _pd.Series(_pd.NA, index=n_values.index)
+        base[col] = _pd.to_numeric(src, errors="coerce")
+
+    base[['week', 'sec', 'el']] = base[['week', 'sec', 'el']].apply(
+        lambda s: _pd.to_numeric(s, errors="coerce")
+    )
+
+    gps_epoch = _pd.Timestamp("1980-01-06")
+    base['datetime'] = gps_epoch + _pd.to_timedelta(base['week'], unit="W") + _pd.to_timedelta(base['sec'], unit="s")
+
+    numeric_cols = [
+        'el', 'lamw', 'gf12', 'mw12', 'siggf', 'sigmw',
+        'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
+    ]
+    base[numeric_cols] = base[numeric_cols].apply(_pd.to_numeric, errors="coerce")
+    base[numeric_cols] = base[numeric_cols].replace([_np.inf, -_np.inf], _np.nan)
+
+    result = base[['datetime', 'sat', 'mode'] + numeric_cols].dropna(subset=["datetime", "sat"])
+    return result.reset_index(drop=True)
 
 
 def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
