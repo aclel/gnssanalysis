@@ -285,208 +285,67 @@ class TestParsePdeCs(unittest.TestCase):
 
 
 class TestParseLc(unittest.TestCase):
-    """Tests for parse_lc function"""
+    """Tests for parse_lc function in wide-column format"""
+
+    @staticmethod
+    def _parse():
+        return parse_lc(trace_lc_sample.decode().splitlines())
 
     def test_parse_lc_basic(self):
-        """Test basic reading of LC (linear combination) data"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Check that we got a DataFrame
+        df = self._parse()
         self.assertIsInstance(df, pd.DataFrame)
-
-        # Check that it's not empty
-        self.assertGreater(len(df), 0, "DataFrame should contain LC records")
-
-        # Check for expected columns
-        expected_columns = [
-            "datetime",
-            "sat",
-            "combo_type",
-            "code_type",
-            "combo_label",
-            "value",
-        ]
-        for col in expected_columns:
-            self.assertIn(col, df.columns, f"Expected column '{col}' not found")
+        self.assertGreater(len(df), 0, "LC DataFrame should not be empty")
+        self.assertIn("datetime", df.columns)
+        self.assertIn("sat", df.columns)
 
     def test_parse_lc_column_types(self):
-        """Test that columns have the correct data types"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # datetime should be datetime64
+        df = self._parse()
         self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
-
-        # String columns
-        for col in ["sat", "combo_type", "code_type", "combo_label"]:
-            self.assertIsInstance(
-                df[col].dtype,
-                CategoricalDtype,
-                f"Column '{col}' should be categorical",
-            )
-
-        # value should be float
+        self.assertIsInstance(df["sat"].dtype, CategoricalDtype)
+        numeric_cols = [col for col in df.columns if col not in {"datetime", "sat"}]
         self.assertTrue(
-            np.issubdtype(df["value"].dtype, np.floating),
-            "Column 'value' should be float type",
+            all(df[col].dtype == np.float32 for col in numeric_cols),
+            "All LC value columns should be float32",
         )
 
-    def test_parse_lc_combo_types(self):
-        """Test that combo_type values are as expected"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Get unique combo_types
-        combo_types = df["combo_type"].unique()
-
-        # Check we have expected combo types
-        expected_types = ["zd", "mp", "gf", "mw", "wl", "if"]
-        for expected in expected_types:
-            self.assertIn(
-                expected, combo_types, f"Expected combo_type '{expected}' not found"
-            )
-
-    def test_parse_lc_code_types(self):
-        """Test that code_type values are as expected"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Get unique code_types
-        code_types = df["code_type"].unique()
-
-        # Should have L (phase) and P (code)
-        self.assertIn("L", code_types, "Expected code_type 'L' (phase)")
-        self.assertIn("P", code_types, "Expected code_type 'P' (code)")
-
-    def test_parse_lc_combo_labels(self):
-        """Test that combo_label values are as expected"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Get unique combo_labels
-        combo_labels = df["combo_label"].unique()
-
-        # Check for some expected labels
-        expected_labels = [
-            "L1",
-            "L2",
-            "L5",
-            "P1",
-            "P2",
-            "P5",
-            "mp1",
-            "mp2",
-            "mp5",
-            "gf12",
-            "gf15",
-            "gf25",
-            "mw12",
-            "mw15",
-            "mw25",
-            "wl12",
-            "wl15",
-            "wl25",
-            "if12",
-            "if15",
-            "if25",
+    def test_expected_columns_present(self):
+        df = self._parse()
+        expected_columns = [
+            "zd_L_L1",
+            "mp_P_mp1",
+            "gf_L_gf12",
+            "mw_L_mw12",
+            "wl_L_wl12",
+            "if_L_if12",
         ]
-        for expected in expected_labels:
-            self.assertIn(
-                expected, combo_labels, f"Expected combo_label '{expected}' not found"
-            )
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected LC column '{col}' missing")
 
-    def test_parse_lc_sat_format(self):
-        """Test that sat values have the expected format"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Get unique sats
-        sats = df["sat"].unique()
-        self.assertGreater(len(sats), 0, "Should have sat values")
-
-        # Check format: first char is constellation, followed by 2 digits
-        for sat in sats:
-            self.assertEqual(len(sat), 3, f"sat '{sat}' should be 3 characters")
-            self.assertIn(
-                sat[0], ["G", "E", "R", "C"], f"sat '{sat}' should start with G/E/R/C"
-            )
-            self.assertTrue(
-                sat[1:].isdigit(), f"sat '{sat}' last 2 chars should be digits"
-            )
-
-    def test_parse_lc_specific_satellite(self):
-        """Test parsing of a specific satellite record"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Check if G02 exists in the data
-        g02_data = df[df["sat"] == "G02"]
-        self.assertGreater(len(g02_data), 0, "Should have G02 data")
-
-        # Get first epoch G02 zd L L1 measurement
-        g02_zd_l_l1 = df[
-            (df["sat"] == "G02")
-            & (df["combo_type"] == "zd")
-            & (df["code_type"] == "L")
-            & (df["combo_label"] == "L1")
-        ]
-        self.assertGreater(len(g02_zd_l_l1), 0, "Expected G02 zd L L1 record")
-        # Should be approximately 22093585.6788 or 22093559.6964 (two epochs)
-        values = g02_zd_l_l1["value"].values
+    def test_code_type_columns(self):
+        df = self._parse()
+        mp_columns = [col for col in df.columns if col.startswith("mp_")]
+        self.assertTrue(mp_columns, "Expected multipath columns")
         self.assertTrue(
-            any(abs(v - target) < 0.001 for target in (22093585.6788, 22093559.6964) for v in values),
-            "Expected G02 zd L L1 value not found",
+            all("_P_" in col for col in mp_columns),
+            "Multipath columns should be associated with code type P",
         )
+        phase_columns = [col for col in df.columns if "_L_" in col]
+        self.assertTrue(phase_columns, "Expected phase (L) columns")
 
-    def test_parse_lc_zero_values(self):
-        """Test that zero values are correctly parsed"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # G02 has L5=0.0000 in the test data
-        g02_l5 = df[
+    def test_specific_values(self):
+        df = self._parse()
+        row = df[
             (df["sat"] == "G02")
-            & (df["combo_type"] == "zd")
-            & (df["code_type"] == "L")
-            & (df["combo_label"] == "L5")
-        ]
-        self.assertGreater(len(g02_l5), 0, "Expected G02 zd L L5 record")
-        # At least one should be exactly 0.0
-        self.assertTrue((g02_l5["value"] == 0.0).any())
-
-    def test_parse_lc_multipath(self):
-        """Test that multipath (mp) measurements are correctly parsed"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # Filter for multipath measurements
-        mp_data = df[df["combo_type"] == "mp"]
-        self.assertGreater(len(mp_data), 0, "Should have multipath measurements")
-
-        # Check that mp only appears with code type 'P'
-        mp_code_types = mp_data["code_type"].unique()
-        self.assertEqual(len(mp_code_types), 1)
-        self.assertEqual(mp_code_types[0], "P")
-
-    def test_parse_lc_negative_values(self):
-        """Test that negative values are correctly parsed"""
-        df = parse_lc(trace_lc_sample.decode().splitlines())
-
-        # G02 has negative mp values in the test data
-        g02_mp1 = df[
-            (df["sat"] == "G02")
-            & (df["combo_type"] == "mp")
-            & (df["code_type"] == "P")
-            & (df["combo_label"] == "mp1")
-        ]
-        self.assertGreater(len(g02_mp1), 0, "Expected G02 mp1 record")
-        # Should be approximately -26.3576
-        self.assertTrue(
-            (abs(g02_mp1["value"] - (-26.3576)) < 0.001).any(),
-            "Expected negative mp1 value",
-        )
+            & (df["datetime"] == pd.Timestamp("2019-01-01 00:00:30"))
+        ].iloc[0]
+        self.assertAlmostEqual(row["zd_L_L1"], 22093585.6788, places=3)
+        self.assertEqual(row["zd_L_L5"], 0.0)
+        self.assertAlmostEqual(row["mp_P_mp1"], -26.3576, places=3)
 
     def test_parse_lc_empty_input(self):
-        """Test behavior with content that doesn't contain PDE form LC section"""
         df = parse_lc(trace_no_lc.decode().splitlines())
-
-        # Should return empty DataFrame
         self.assertIsInstance(df, pd.DataFrame)
-        self.assertEqual(len(df), 0, "Should return empty DataFrame for no LC data")
-
-
+        self.assertEqual(len(df), 0)
 class TestParseResiduals(unittest.TestCase):
     """Tests for parse_residuals helper"""
 

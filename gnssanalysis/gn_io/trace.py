@@ -309,7 +309,7 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
             - value       : float — measurement value
     """
-    datetime_strs = []
+    datetime_vals = []
     sat_vals = []
     combo_type_vals = []
     code_type_vals = []
@@ -377,21 +377,21 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             if not _np.isfinite(value):
                 value = _np.nan
 
-            datetime_strs.append(dt_str)
+            datetime_vals.append(dt_str)
             sat_vals.append(sat)
             combo_type_vals.append(combo_type)
             code_type_vals.append(code_type)
             combo_label_vals.append(label)
             value_vals.append(value)
 
-    if not datetime_strs:
+    if not datetime_vals:
         return _pd.DataFrame(
-            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+            columns=['datetime', 'sat']
         )
 
     df = _pd.DataFrame(
         {
-            'datetime': _pd.to_datetime(datetime_strs, errors='coerce'),
+            'datetime': _pd.to_datetime(datetime_vals, errors='coerce'),
             'sat': sat_vals,
             'combo_type': combo_type_vals,
             'code_type': code_type_vals,
@@ -402,14 +402,32 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
     df = df.dropna(subset=['datetime'])
     if df.empty:
         return _pd.DataFrame(
-            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
+            columns=['datetime', 'sat']
         )
 
-    df['value'] = df['value'].astype(_np.float32)
-    for col in ['sat', 'combo_type', 'code_type', 'combo_label']:
-        df[col] = _pd.Categorical(df[col])
+    df['col_key'] = df['combo_type'] + "_" + df['code_type'] + "_" + df['combo_label']
+    df = df.drop_duplicates(['datetime', 'sat', 'col_key'], keep='last')
 
-    return df.reset_index(drop=True)
+    wide = df.pivot_table(
+        index=['datetime', 'sat'],
+        columns='col_key',
+        values='value',
+        aggfunc='first',
+    )
+
+    if wide.empty:
+        return _pd.DataFrame(columns=['datetime', 'sat'])
+
+    wide.columns = [str(col) for col in wide.columns]
+    wide = wide.sort_index(axis=1)
+    wide = wide.reset_index()
+
+    numeric_cols = [col for col in wide.columns if col not in {'datetime', 'sat'}]
+    for col in numeric_cols:
+        wide[col] = wide[col].astype(_np.float32)
+    wide['sat'] = _pd.Categorical(wide['sat'])
+
+    return wide
 
 
 def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
