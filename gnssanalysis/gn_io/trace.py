@@ -309,60 +309,107 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
             - value       : float — measurement value
     """
-    line_list = []
+    datetime_strs = []
+    sat_vals = []
+    combo_type_vals = []
+    code_type_vals = []
+    combo_label_vals = []
+    value_vals = []
+
     for ln in lines:
         if not isinstance(ln, str):
             continue
-        stripped = ln.strip()
-        if not stripped or stripped.startswith('*'):
+        line = ln.strip()
+        if not line or line.startswith('*'):
             continue
-        line_list.append(stripped)
-    if not line_list:
+
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+
+        dt_str = " ".join(parts[:2])
+        idx = 2
+        if idx >= len(parts) or parts[idx] != "sat=":
+            continue
+        idx += 1
+        if idx >= len(parts):
+            continue
+        sat = parts[idx]
+        idx += 1
+        if idx >= len(parts):
+            continue
+        combo_type = parts[idx]
+        idx += 1
+        if idx >= len(parts):
+            continue
+        code_type = parts[idx]
+        idx += 1
+        if idx >= len(parts) or parts[idx] != "--":
+            continue
+        idx += 1
+
+        while idx < len(parts):
+            token = parts[idx]
+            label = value_token = None
+
+            if token.endswith("="):
+                label = token[:-1]
+                idx += 1
+                if idx >= len(parts):
+                    break
+                value_token = parts[idx]
+                idx += 1
+            elif idx + 2 < len(parts) and parts[idx + 1] == "=":
+                label = token
+                value_token = parts[idx + 2]
+                idx += 3
+            else:
+                idx += 1
+                continue
+
+            if not label:
+                continue
+            try:
+                value = float(value_token)
+            except (TypeError, ValueError):
+                continue
+
+            if not _np.isfinite(value):
+                value = _np.nan
+
+            datetime_strs.append(dt_str)
+            sat_vals.append(sat)
+            combo_type_vals.append(combo_type)
+            code_type_vals.append(code_type)
+            combo_label_vals.append(label)
+            value_vals.append(value)
+
+    if not datetime_strs:
         return _pd.DataFrame(
             columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
         )
 
-    series = _pd.Series(line_list)
-
-    extracted = series.str.extract(
-        r"""
-        ^\s*
-        (?P<datetime>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)
-        \s+sat=\s+(?P<sat>\S+)
-        \s+(?P<combo_type>\S+)
-        \s+(?P<code_type>\S+)
-        \s+--\s+(?P<measurements>.+)$
-        """,
-        flags=_re.VERBOSE,
-    ).dropna(subset=["datetime", "sat", "combo_type", "code_type", "measurements"])
-
-    if extracted.empty:
-        return _pd.DataFrame(
-            columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
-        )
-
-    pairs = extracted["measurements"].str.extractall(
-        rf"(?P<combo_label>\w+)\s*=\s*(?P<value>{FLOAT_TOKEN})"
+    df = _pd.DataFrame(
+        {
+            'datetime': _pd.to_datetime(datetime_strs, errors='coerce'),
+            'sat': sat_vals,
+            'combo_type': combo_type_vals,
+            'code_type': code_type_vals,
+            'combo_label': combo_label_vals,
+            'value': _np.array(value_vals, dtype=_np.float32),
+        }
     )
-    if pairs.empty:
+    df = df.dropna(subset=['datetime'])
+    if df.empty:
         return _pd.DataFrame(
             columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
         )
 
-    pairs = pairs.reset_index(level=-1, drop=True)
-    df = pairs.join(extracted.drop(columns="measurements"))
-    df["datetime"] = _pd.to_datetime(df["datetime"], errors="coerce")
-    df["value"] = _pd.to_numeric(df["value"], errors="coerce")
-    df["value"] = df["value"].replace([_np.inf, -_np.inf], _np.nan)
-    df = df.dropna(subset=["datetime"])
-
-    df = df.reset_index(drop=True)[
-        ['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
-    ]
+    df['value'] = df['value'].astype(_np.float32)
     for col in ['sat', 'combo_type', 'code_type', 'combo_label']:
-        df[col] = df[col].astype(object)
-    df['value'] = df['value'].astype(float)
-    return df
+        df[col] = _pd.Categorical(df[col])
+
+    return df.reset_index(drop=True)
 
 
 def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:

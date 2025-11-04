@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 import textwrap
 import pandas as pd
+from pandas.api.types import CategoricalDtype
 import numpy as np
 
 from gnssanalysis.gn_io.trace import (
@@ -317,7 +318,11 @@ class TestParseLc(unittest.TestCase):
 
         # String columns
         for col in ["sat", "combo_type", "code_type", "combo_label"]:
-            self.assertEqual(df[col].dtype, object, f"Column '{col}' should be object")
+            self.assertIsInstance(
+                df[col].dtype,
+                CategoricalDtype,
+                f"Column '{col}' should be categorical",
+            )
 
         # value should be float
         self.assertTrue(
