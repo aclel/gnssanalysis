@@ -4,6 +4,8 @@ import logging as _logging
 import os as _os
 import re as _re
 from io import BytesIO as _BytesIO
+from typing import Iterable as _Iterable
+import warnings as _warnings
 
 import pandas as _pd
 import numpy as _np
@@ -12,6 +14,626 @@ from .. import gn_aux as _gn_aux
 from .. import gn_const as _gn_const
 from .. import gn_datetime as _gn_datetime
 from .. import gn_io as _gn_io
+
+
+# Regex patterns for parsing TRACE files
+FLOAT = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+
+# Residual line regex (supports negative iter for smoothed files, and optional ratio fields)
+LINE_RE = _re.compile(
+    rf"""
+    ^%\s+
+    (?P<iter>-?\d+)\s+
+    (?P<date>\d{{4}}-\d{{2}}-\d{{2}})\s+                 # e.g. 2025-10-05
+    (?P<time>\d{{2}}:\d{{2}}:\d{{2}}(?:\.\d+)?)\s+       # e.g. 00:01:00.00
+    (?P<meas>(?:CODE_MEAS|PHAS_MEAS))\s+
+    (?P<sat>\S+)\s+
+    (?P<recv>\S+)\s+
+    (?P<sig>\S+)\s+
+    (?P<prefit>{FLOAT})\s+
+    (?P<postfit>{FLOAT})\s+
+    (?P<sigma>{FLOAT})
+    (?:\s+(?P<prefit_ratio>{FLOAT})\s+(?P<postfit_ratio>{FLOAT}))?  # optional at higher trace level
+    \s+(?P<label>\S+)\s*$
+    """,
+    _re.VERBOSE,
+)
+
+# Large error regex (handles both STATE and MEAS errors)
+LARGE_RE = _re.compile(
+    r"""^(?P<date>\d{4}-\d{2}-\d{2})\s+
+        (?P<time>\d{2}:\d{2}:\d{2}\.\d+)\s+
+        LARGE\s+(?P<kind>STATE|MEAS)\s+ERROR\s+OF\s*:\s*
+        (?P<value>[0-9.]+)\s+AT\s+\d+\s*:\s*
+        (?:(?P<meas_type>\S+)\s+(?P<sat>\S+)\s+(?P<recv>\S+)\s+(?P<sig>\S+)
+        |
+        (?P<param>\S+)\s+(?P<recv2>\S+)\s+(?P<comp>\S+))""",
+    _re.VERBOSE,
+)
+
+# Ambiguity reset regex (handles both PREPROC and REJECT)
+AMB_RE = _re.compile(
+    r"""^(?P<date>\d{4}-\d{2}-\d{2})\s+
+        (?P<time>\d{2}:\d{2}:\d{2}\.\d+)\s+
+        Ambiguity\ Removed\s+
+        -\s+(?P<action>PREPROC|REJECT)\s+
+        AMBIGUITY\s+
+        (?P<sat>\S+)\s+
+        (?P<recv>\S+)\s+
+        (?P<sig>\S+)
+        (?P<rest>.*)$
+    """,
+    _re.VERBOSE
+)
+
+
+def _to_float_or_nan(x: str) -> float:
+    """Convert string to float, return NaN on failure."""
+    try:
+        return float(x)
+    except Exception:
+        return float("nan")
+
+
+def parse_trace_lines(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse residual lines (starting with '%') from Network TRACE files.
+
+    Supports both classic 12-field format and higher-trace 14-field format with ratios.
+    Also supports negative iteration numbers from smoothed TRACE files.
+
+    When files contain multiple iterations (forward + smoothed), use keep_last_iteration()
+    to filter to the final iteration per observation.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - iter     : int   — filter iteration number (can be negative for smoothed)
+            - date     : str   — date string (YYYY-MM-DD)
+            - time     : str   — time string (HH:MM:SS.fff)
+            - meas     : str   — measurement type ("PHAS_MEAS" or "CODE_MEAS")
+            - sat      : str   — satellite identifier (e.g. "G20")
+            - recv     : str   — receiver/station code
+            - sig      : str   — signal code (e.g. "L1C")
+            - prefit   : float — prefit residual value
+            - postfit  : float — postfit residual value
+            - sigma    : float — measurement sigma
+            - label    : str   — signal label
+            - prefit_ratio  : float — prefit ratio (NaN if not present)
+            - postfit_ratio : float — postfit ratio (NaN if not present)
+            - datetime : pd.Timestamp — parsed timestamp
+
+    Examples
+    --------
+    >>> with open("trace.SUM") as f:
+    ...     df = parse_trace_lines(f)
+    >>> df = keep_last_iteration(df)  # Keep only final iteration
+    """
+    records = []
+    for ln in lines:
+        if not ln.startswith('%'):
+            continue
+        m = LINE_RE.match(ln)
+        if not m:
+            continue
+        gd = m.groupdict()
+
+        rec = {
+            "iter": int(gd["iter"]),
+            "date": gd["date"],
+            "time": gd["time"],
+            "meas": gd["meas"],
+            "sat": gd["sat"],
+            "recv": gd["recv"],
+            "sig": gd["sig"],
+            "prefit": _to_float_or_nan(gd["prefit"]),
+            "postfit": _to_float_or_nan(gd["postfit"]),
+            "sigma": _to_float_or_nan(gd["sigma"]),
+            "label": gd["label"],
+        }
+
+        # Optional higher-trace columns
+        pr = gd.get("prefit_ratio")
+        por = gd.get("postfit_ratio")
+        rec["prefit_ratio"]  = _to_float_or_nan(pr)  if pr  is not None else float("nan")
+        rec["postfit_ratio"] = _to_float_or_nan(por) if por is not None else float("nan")
+
+        records.append(rec)
+
+    if not records:
+        return _pd.DataFrame(columns=[
+            "iter","date","time","meas","sat","recv","sig",
+            "prefit","postfit","sigma","label","prefit_ratio","postfit_ratio","datetime"
+        ])
+
+    df = _pd.DataFrame.from_records(records)
+    df["datetime"] = _pd.to_datetime(
+        df["date"] + " " + df["time"],
+        format="%Y-%m-%d %H:%M:%S.%f", errors="coerce"
+    )
+    return df
+
+
+def parse_large_errors(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse 'LARGE STATE ERROR' and 'LARGE MEAS ERROR' lines from Network TRACE files.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        For MEAS errors, columns: datetime, kind, value, meas_type, sat, recv, sig
+        For STATE errors, columns: datetime, kind, value, recv, param, comp
+    """
+    recs = []
+    for ln in lines:
+        if "LARGE" not in ln:
+            continue
+        m = LARGE_RE.match(ln)
+        if not m:
+            continue
+        gd = m.groupdict()
+        dt = _pd.to_datetime(gd["date"] + " " + gd["time"])
+        kind = gd["kind"]
+        val = float(gd["value"])
+        if kind == "STATE":
+            recs.append({
+                "datetime": dt,
+                "kind": kind,
+                "value": val,
+                "recv": gd["recv2"],
+                "param": gd["param"],
+                "comp": gd["comp"],
+            })
+        else:
+            recs.append({
+                "datetime": dt,
+                "kind": kind,
+                "value": val,
+                "meas_type": gd["meas_type"],
+                "sat": gd["sat"],
+                "recv": gd["recv"],
+                "sig": gd["sig"],
+            })
+    return _pd.DataFrame.from_records(recs)
+
+
+def parse_ambiguity_resets(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse 'Ambiguity Removed' lines (both PREPROC and REJECT actions) from Network TRACE files.
+
+    PREPROC: Ambiguities removed during preprocessing (GF, MW, LLI, SCDIA, retrack cycle slip detection)
+    REJECT: Ambiguities removed by Kalman filter
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime : pd.Timestamp — timestamp of reset
+            - action   : str — "PREPROC" or "REJECT"
+            - sat      : str — satellite identifier
+            - recv     : str — receiver/station code
+            - sig      : str — signal code
+            - reasons  : str — comma-separated reset reasons
+    """
+    recs = []
+    for ln in lines:
+        if "Ambiguity Removed" not in ln:
+            continue
+        m = AMB_RE.match(ln.rstrip("\n"))
+        if not m:
+            continue
+        gd = m.groupdict()
+        dt = _pd.to_datetime(f"{gd['date']} {gd['time']}", errors="coerce")
+
+        # Parse reasons from tail
+        tail = gd.get("rest", "")
+        reasons = []
+        for chunk in tail.split("-"):
+            t = chunk.strip()
+            if not t:
+                continue
+            if t.upper() in {"PREPROC", "REJECT", "AMBIGUITY"}:
+                continue
+            reasons.append(t)
+
+        # Clean, dedupe while preserving order
+        clean = []
+        seen = set()
+        for r in reasons:
+            rr = _re.sub(r"\s+", " ", r)
+            if rr not in seen:
+                seen.add(rr)
+                clean.append(rr)
+
+        # Add 'KF' reason for REJECT (Kalman filter), if not already present
+        action_str = gd["action"].strip().upper()
+        if action_str == "REJECT":
+            # check case-insensitively if KF already present
+            present_upper = {x.upper() for x in clean}
+            if "KF" not in present_upper:
+                clean.insert(0, "KF")  # put first so it's prominent
+
+        recs.append(
+            {
+                "datetime": dt,
+                "action": action_str,  # PREPROC / REJECT
+                "sat": gd["sat"].strip(),
+                "recv": gd["recv"].strip(),
+                "sig": gd["sig"].strip(),
+                "reasons": ", ".join(clean),
+            }
+        )
+
+    return _pd.DataFrame.from_records(recs)
+
+
+def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse LC (linear combination) lines from station TRACE files.
+
+    LC combos include: zd, mp, gf, mw, wl, if (zero-difference, multipath,
+    geometry-free, Melbourne-Wübbena, wide-lane, ionosphere-free)
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines from LC combo blocks (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime    : pd.Timestamp — timestamp
+            - sat         : str — satellite identifier
+            - combo_type  : str — combination type (zd, mp, gf, mw, wl, if)
+            - code_type   : str — code type (L for phase, P for code)
+            - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
+            - value       : float — measurement value
+    """
+    records = []
+
+    for line in lines:
+        if not line.strip() or line.startswith('*'):
+            continue
+
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+
+        # Parse timestamp (first two elements: date and time)
+        try:
+            timestamp = _pd.to_datetime(f"{parts[0]} {parts[1]}")
+        except:
+            continue
+
+        # Parse satellite (sat= PRN)
+        if parts[2] != 'sat=' or len(parts) < 4:
+            continue
+        sat = parts[3]
+
+        # Parse combo_type and code_type
+        combo_type = parts[4]
+        code_type = parts[5]
+
+        # Skip the '--' separator
+        if parts[6] != '--':
+            continue
+
+        # Parse the measurements (label = value pairs)
+        # Two formats exist:
+        # 1) label = value (zd, mp): [..., 'L1', '=', '22093585.6788', ...]
+        # 2) label= value (gf, mw, wl, if): [..., 'gf12=', '7.8522', ...]
+        idx = 7
+        while idx < len(parts):
+            # Check if current element ends with '=' (format 2: label=)
+            if idx < len(parts) - 1 and parts[idx].endswith('='):
+                label = parts[idx].rstrip('=')
+                try:
+                    value = float(parts[idx + 1])
+                    records.append({
+                        'datetime': timestamp,
+                        'sat': sat,
+                        'combo_type': combo_type,
+                        'code_type': code_type,
+                        'combo_label': label,
+                        'value': value
+                    })
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 2
+            # Check if next element is '=' (format 1: label = )
+            elif idx < len(parts) - 2 and parts[idx + 1] == '=':
+                label = parts[idx]
+                try:
+                    value = float(parts[idx + 2])
+                    records.append({
+                        'datetime': timestamp,
+                        'sat': sat,
+                        'combo_type': combo_type,
+                        'code_type': code_type,
+                        'combo_label': label,
+                        'value': value
+                    })
+                    idx += 3
+                except (ValueError, IndexError):
+                    idx += 3
+            else:
+                idx += 1
+
+    if not records:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value'
+        ])
+
+    return _pd.DataFrame.from_records(records)
+
+
+def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse PDE cycle slip detection & repair metrics from TRACE files.
+
+    PDE-CS lines contain metrics for cycle slip detection including geometry-free,
+    Melbourne-Wübbena combinations, and validation statistics.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime : pd.Timestamp — timestamp
+            - sat      : str — satellite identifier
+            - mode     : str — frequency mode (TRIP/DUAL/None)
+            - el       : float — elevation angle (degrees)
+            - lamw     : float — lambda wide-lane (meters)
+            - gf12     : float — geometry-free L1-L2 (meters)
+            - mw12     : float — Melbourne-Wübbena L1-L2 (meters)
+            - siggf    : float — sigma geometry-free (meters)
+            - sigmw    : float — sigma Melbourne-Wübbena (meters)
+            - lamew    : float — lambda extra-wide-lane (meters)
+            - gf25     : float — geometry-free L2-L5 (meters)
+            - mw25     : float — Melbourne-Wübbena L2-L5 (meters)
+            - vtpv     : float — V-transpose P V statistic
+            - val      : float — validation statistic
+            - thres    : float — threshold value
+            - N1       : float — ambiguity L1 (cycles)
+            - N2       : float — ambiguity L2 (cycles)
+            - N5       : float — ambiguity L5 (cycles)
+    """
+    records = []
+
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 6:  # Minimum: PDE-CS GPST week sec sat el
+            continue
+
+        # Only process lines that start with "PDE-CS"
+        if parts[0] != 'PDE-CS':
+            continue
+
+        # Parse base fields
+        idx = 0
+        marker = parts[idx]  # PDE-CS
+        idx += 1
+        timesys = parts[idx]  # GPST
+        idx += 1
+
+        # Check for optional mode (TRIP/DUAL)
+        mode = None
+        if idx < len(parts) and parts[idx] in ['TRIP', 'DUAL']:
+            mode = parts[idx]
+            idx += 1
+
+        # Week and second
+        try:
+            week = int(parts[idx])
+            sec = float(parts[idx + 1])
+            idx += 2
+        except (ValueError, IndexError):
+            continue
+
+        # Convert GPS week/sec to datetime
+        try:
+            # Convert GPS week/sec to datetime (not J2000)
+            gps_epoch = _pd.Timestamp('1980-01-06')  # GPS epoch
+            dt = gps_epoch + _pd.Timedelta(weeks=week, seconds=sec)
+        except:
+            continue
+
+        # Satellite and elevation
+        try:
+            sat = parts[idx]
+            el = float(parts[idx + 1])
+            idx += 2
+        except (ValueError, IndexError):
+            continue
+
+        # Check for special markers
+        if idx < len(parts) and parts[idx].startswith('--'):
+            # Skip lines with --low_elevation--, --single frequency--, etc.
+            continue
+
+        # Parse metrics if available
+        record = {
+            'datetime': dt,
+            'sat': sat,
+            'mode': mode,
+            'el': el,
+            'lamw': _np.nan,
+            'gf12': _np.nan,
+            'mw12': _np.nan,
+            'siggf': _np.nan,
+            'sigmw': _np.nan,
+            'lamew': _np.nan,
+            'gf25': _np.nan,
+            'mw25': _np.nan,
+            'vtpv': _np.nan,
+            'val': _np.nan,
+            'thres': _np.nan,
+            'N1': _np.nan,
+            'N2': _np.nan,
+            'N5': _np.nan,
+        }
+
+        # Try to parse the metric fields (lamw through mw25)
+        try:
+            if idx < len(parts):
+                record['lamw'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['gf12'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['mw12'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['siggf'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['sigmw'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
+                idx += 1
+            if idx < len(parts):
+                record['lamew'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
+                idx += 1
+            if idx < len(parts):
+                record['gf25'] = float(parts[idx])
+                idx += 1
+            if idx < len(parts):
+                record['mw25'] = float(parts[idx]) if parts[idx] not in ['nan', '-nan'] else _np.nan
+                idx += 1
+        except (ValueError, IndexError):
+            pass
+
+        # Parse LC field: vtpv= X val= Y thres= Z
+        while idx < len(parts):
+            if parts[idx].startswith('vtpv='):
+                try:
+                    record['vtpv'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            elif parts[idx].startswith('val='):
+                try:
+                    record['val'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            elif parts[idx].startswith('thres='):
+                try:
+                    record['thres'] = float(parts[idx + 1])
+                    idx += 2
+                except (ValueError, IndexError):
+                    idx += 1
+            else:
+                # Try parsing as N1, N2, N5 at the end
+                try:
+                    if _np.isnan(record['N1']):
+                        record['N1'] = float(parts[idx])
+                    elif _np.isnan(record['N2']):
+                        record['N2'] = float(parts[idx])
+                    elif _np.isnan(record['N5']):
+                        record['N5'] = float(parts[idx])
+                except ValueError:
+                    pass
+                idx += 1
+
+        records.append(record)
+
+    if not records:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'mode', 'el', 'lamw', 'gf12', 'mw12', 'siggf',
+            'sigmw', 'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
+        ])
+
+    return _pd.DataFrame.from_records(records)
+
+
+def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse satellite elevation angles from TRACE files.
+
+    This is a convenience function that calls parse_pde_cs() and returns
+    only the elevation-related columns for simpler analysis.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime : pd.Timestamp — timestamp
+            - sat      : str — satellite identifier
+            - el       : float — elevation angle (degrees)
+            - mode     : str — frequency mode (TRIP/DUAL/None)
+    """
+    df = parse_pde_cs(lines)
+
+    if df.empty:
+        return _pd.DataFrame(columns=['datetime', 'sat', 'el', 'mode'])
+
+    # Return only elevation-relevant columns
+    return df[['datetime', 'sat', 'el', 'mode']].copy()
+
+
+def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
+    """
+    Filter residual DataFrame to keep only the last iteration for each observation.
+
+    When TRACE files contain multiple iterations (e.g., forward + smoothed),
+    this keeps only the final iteration for each unique combination of
+    (datetime, meas, sat, recv, sig, label).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame from parse_trace_lines() with 'iter' column
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered DataFrame with only last iterations, sorted by (datetime, sat, sig)
+
+    Examples
+    --------
+    >>> df = parse_trace_lines(open("trace.SUM"))
+    >>> df = keep_last_iteration(df)  # Keep only final iteration
+    """
+    if df.empty:
+        return df
+    keys = ["datetime", "meas", "sat", "recv", "sig", "label"]
+    return (
+        df.sort_values(["datetime", "iter"])
+          .drop_duplicates(subset=keys, keep="last")
+          .sort_values(["datetime", "sat", "sig"])
+          .reset_index(drop=True)
+    )
+
+
+# ============================================================================
+# Legacy/compatibility functions below this line
+# ============================================================================
 
 
 def _trace_extract(path_or_bytes, blk_name):
@@ -133,49 +755,6 @@ def _read_trace_residuals(path_or_bytes, it_max_only=True, throw_if_nans=False):
         .set_index(["TIME", "SITE", "TYPE", "SAT", "CODE", "It", "BLK"])
     )
 
-
-_RE_TRACE_HEAD = _re.compile(
-    rb"station\s*\:\s*(.{4})\n\w+\s*\:\s*(.+|)\n\w+\s*\:\s*(.+|)\n\w+\s*\:\s*(\d)\n\w+\s*\:\s*(.+)"
-)
-_RE_TRACE_LC = _re.compile(rb"PDE\sform\sLC.+((?:\n.+)+)")
-_RE_EL = _re.compile(rb"PDE-CS GPST\s+(?:\w+\s+)?(\d+)\s+(\d+(?:\.\d+)?)\s+([GREC]\d\d)\s+(\d+\.\d+)")
-_RE_PDE_CS_SECTION = _re.compile(
-    rb"\*-------- PDE cycle slip detection & repair --------\*.*?PDE-CS\s+GPST[^\n]+\n\s*\n((?:PDE-CS[^\n]+\n?)*)",
-    _re.MULTILINE | _re.DOTALL
-)
-_RE_LARGE_MEAS = _re.compile(
-    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
-    r'LARGE MEAS\s+'
-    r'ERROR OF\s*:\s*([\d.]+)\s+'
-    r'AT\s+(\d+)\s*:\s+'
-    r'(\w+)\s+'  # TYPE
-    r'(\w+)\s+'  # SAT
-    r'(\w+)\s+'  # SITE
-    r'(\w+)'     # CODE
-)
-_RE_MEAS_DEWEIGHTED = _re.compile(
-    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
-    r'Measurement Deweighted\s+-\s+(\w+)\s+'  # Fit type (Postfit/Prefit)
-    r'(\w+)\s+'  # TYPE
-    r'(\w+)\s+'  # SAT
-    r'(\w+)\s+'  # SITE
-    r'(\w+)\s+'  # CODE
-    r'-\s+PostfitResidual:\s+([\d.-]+)\s+'
-    r'-\s+preDeweightSigma:\s+([\d.]+)\s+'
-    r'-\s+postDeweightSigma:\s+([\d.]+)'
-)
-_RE_AMB_REMOVED = _re.compile(
-    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{2})\s+'
-    r'Ambiguity Removed\s+'
-    r'-\s+PREPROC\s+'
-    r'AMBIGUITY\s+'
-    r'(\w+)\s+'  # SAT
-    r'(\w+)\s+'  # SITE
-    r'(\w+)\s+'  # CODE
-    r'(.+)'      # Reasons (rest of line)
-)
-
-
 def _find_trace(output_path: str) -> tuple:
     """Scans output path for TRACE files"""
     station_names = set()
@@ -190,487 +769,6 @@ def _find_trace(output_path: str) -> tuple:
     station_names = sorted(station_names)
     trace_paths = sorted(trace_paths)
     return station_names, trace_paths
-
-
-def _read_trace_LC(path_or_bytes):
-    '''Parses the LC combo block of the trace files producing a single dataframe.
-
-    Returns a DataFrame with columns:
-    - TIME: J2000 timestamp
-    - PRN: Satellite ID
-    - combo_type: Type of combination (zd, mp, gf, mw, wl, if)
-    - code_type: Code type (L for phase, P for code)
-    - combo_label: Specific combination label (L1, L2, L5, gf12, etc.)
-    - value: Measurement value
-    '''
-    if isinstance(path_or_bytes, str):
-        trace_content = _gn_io.common.path2bytes(path_or_bytes)  # will accept .trace.Z also
-    else:
-        trace_content = path_or_bytes
-
-    trace_LC_list = _RE_TRACE_LC.findall(string=trace_content)
-    if not trace_LC_list:
-        return _pd.DataFrame()
-
-    LC_bytes = b''.join(trace_LC_list)
-
-    # Parse lines and extract data
-    records = []
-    for line in LC_bytes.decode('utf-8').strip().split('\n'):
-        if not line.strip() or line.startswith('*'):
-            continue
-
-        parts = line.split()
-        if len(parts) < 10:
-            continue
-
-        # Parse timestamp (first two elements: date and time)
-        try:
-            timestamp = _pd.to_datetime(f"{parts[0]} {parts[1]}")
-        except:
-            continue
-
-        # Parse satellite (sat= PRN)
-        if parts[2] != 'sat=' or len(parts) < 4:
-            continue
-        prn = parts[3]
-
-        # Parse combo_type and code_type
-        combo_type = parts[4]
-        code_type = parts[5]
-
-        # Skip the '--' separator
-        if parts[6] != '--':
-            continue
-
-        # Parse the three measurements (label = value pairs)
-        # Two formats exist:
-        # 1) label = value (zd, mp): [..., 'L1', '=', '22093585.6788', ...]
-        # 2) label= value (gf, mw, wl, if): [..., 'gf12=', '7.8522', ...]
-        idx = 7
-        while idx < len(parts):
-            # Check if current element ends with '=' (format 2: label=)
-            if idx < len(parts) - 1 and parts[idx].endswith('='):
-                label = parts[idx].rstrip('=')
-                try:
-                    value = float(parts[idx + 1])
-                    records.append({
-                        'timestamp': timestamp,
-                        'PRN': prn,
-                        'combo_type': combo_type,
-                        'code_type': code_type,
-                        'combo_label': label,
-                        'value': value
-                    })
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 2
-            # Check if next element is '=' (format 1: label = )
-            elif idx < len(parts) - 2 and parts[idx + 1] == '=':
-                label = parts[idx]
-                try:
-                    value = float(parts[idx + 2])
-                    records.append({
-                        'timestamp': timestamp,
-                        'PRN': prn,
-                        'combo_type': combo_type,
-                        'code_type': code_type,
-                        'combo_label': label,
-                        'value': value
-                    })
-                    idx += 3
-                except (ValueError, IndexError):
-                    idx += 3
-            else:
-                idx += 1
-
-    if not records:
-        return _pd.DataFrame()
-
-    # Create DataFrame
-    df = _pd.DataFrame(records)
-
-    # Convert timestamp to J2000
-    df['TIME'] = _gn_datetime.datetime2j2000(df['timestamp'].values)
-    df = df.drop(columns=['timestamp'])
-
-    return df.set_index(['TIME', 'PRN', 'combo_type', 'code_type', 'combo_label'])
-
-def _read_trace_el(path_or_bytes):
-    "Get elevation angles for satellites from trace file"
-    if isinstance(path_or_bytes, str):
-        trace_content = _gn_io.common.path2bytes(path_or_bytes) # will accept .trace.Z also
-    else:
-        trace_content = path_or_bytes
-    trace_EL_list = _RE_EL.findall(string=trace_content)
-
-    el_df = _pd.DataFrame(trace_EL_list)
-    if len(el_df) > 0:
-        el_df[0] = el_df[0].astype(_np.int32)  # GPS week
-        el_df[1] = el_df[1].astype(float)      # Time of week
-        el_df[2] = el_df[2].str.decode("utf-8") # Satellite PRN
-        el_df[3] = el_df[3].astype(float)      # Elevation
-        el_df['TIME'] = _gn_datetime.gpsweeksec2datetime(gps_week=el_df[0], tow=el_df[1], as_j2000=True)
-        el_df.drop(columns=[0,1],inplace=True)
-        el_df.columns = ['PRN','el','TIME']
-    else:
-        el_df = el_df.reindex(columns=['PRN','el','TIME'])
-    return el_df.set_index(['TIME'])
-
-
-def _read_trace_pde_cs(path_or_bytes):
-    """Extract PDE cycle slip detection & repair metrics from trace file.
-
-    Returns a DataFrame with columns:
-    - TIME: J2000 timestamp
-    - PRN: Satellite ID
-    - mode: Frequency mode (TRIP/DUAL/None)
-    - el: Elevation angle (degrees)
-    - lamw: Lambda wide-lane (meters)
-    - gf12: Geometry-free L1-L2 (meters)
-    - mw12: Melbourne-Wubbena L1-L2 (meters)
-    - siggf: Sigma geometry-free (meters)
-    - sigmw: Sigma Melbourne-Wubbena (meters)
-    - lamew: Lambda extra-wide-lane (meters)
-    - gf25: Geometry-free L2-L5 (meters)
-    - mw25: Melbourne-Wubbena L2-L5 (meters)
-    - vtpv: V-transpose P V statistic
-    - val: Validation statistic
-    - thres: Threshold value
-    - N1, N2, N5: Ambiguity values (cycles)
-    """
-    if isinstance(path_or_bytes, str):
-        trace_content = _gn_io.common.path2bytes(path_or_bytes)
-    else:
-        trace_content = path_or_bytes
-
-    # Find all PDE-CS sections
-    pde_cs_sections = _RE_PDE_CS_SECTION.findall(string=trace_content)
-
-    if not pde_cs_sections:
-        return _pd.DataFrame()
-
-    # Combine all sections and parse line by line
-    pde_cs_bytes = b'\n'.join(pde_cs_sections)
-    lines = pde_cs_bytes.decode('utf-8').strip().split('\n')
-
-    records = []
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 6:  # Minimum: PDE-CS GPST week sec prn el
-            continue
-
-        # Skip debug lines (detslp_ll:, detslp_gf:, etc.)
-        # Only process lines that start with "PDE-CS"
-        if parts[0] != 'PDE-CS':
-            continue
-
-        # Parse base fields
-        idx = 0
-        marker = parts[idx]  # PDE-CS
-        idx += 1
-        timesys = parts[idx]  # GPST
-        idx += 1
-
-        # Check for optional mode (TRIP/DUAL)
-        mode = None
-        if parts[idx] in ['TRIP', 'DUAL']:
-            mode = parts[idx]
-            idx += 1
-
-        # Week and second
-        try:
-            week = int(parts[idx])
-            sec = float(parts[idx + 1])
-            idx += 2
-        except (ValueError, IndexError):
-            continue
-
-        # PRN and elevation
-        try:
-            prn = parts[idx]
-            el = float(parts[idx + 1])
-            idx += 2
-        except (ValueError, IndexError):
-            continue
-
-        # Check for special markers
-        if idx < len(parts) and parts[idx].startswith('--'):
-            # Skip lines with --low_elevation--, --single frequency--, etc.
-            continue
-
-        # Parse metrics if available
-        record = {
-            'week': week,
-            'sec': sec,
-            'prn': prn,
-            'mode': mode,
-            'el': el,
-            'lamw': _np.nan,
-            'gf12': _np.nan,
-            'mw12': _np.nan,
-            'siggf': _np.nan,
-            'sigmw': _np.nan,
-            'lamew': _np.nan,
-            'gf25': _np.nan,
-            'mw25': _np.nan,
-            'vtpv': _np.nan,
-            'val': _np.nan,
-            'thres': _np.nan,
-            'N1': _np.nan,
-            'N2': _np.nan,
-            'N5': _np.nan,
-        }
-
-        # Try to parse the metric fields (lamw through mw25)
-        try:
-            if idx < len(parts):
-                record['lamw'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['gf12'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['mw12'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['siggf'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['sigmw'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
-                idx += 1
-            if idx < len(parts):
-                record['lamew'] = float(parts[idx]) if parts[idx] not in ['inf', '-inf'] else _np.nan
-                idx += 1
-            if idx < len(parts):
-                record['gf25'] = float(parts[idx])
-                idx += 1
-            if idx < len(parts):
-                record['mw25'] = float(parts[idx]) if parts[idx] not in ['nan', '-nan'] else _np.nan
-                idx += 1
-        except (ValueError, IndexError):
-            pass
-
-        # Parse LC field: vtpv= X val= Y thres= Z
-        while idx < len(parts):
-            if parts[idx].startswith('vtpv='):
-                try:
-                    record['vtpv'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            elif parts[idx].startswith('val='):
-                try:
-                    record['val'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            elif parts[idx].startswith('thres='):
-                try:
-                    record['thres'] = float(parts[idx + 1])
-                    idx += 2
-                except (ValueError, IndexError):
-                    idx += 1
-            else:
-                # Try parsing as N1, N2, N5 at the end
-                try:
-                    if _np.isnan(record['N1']):
-                        record['N1'] = float(parts[idx])
-                    elif _np.isnan(record['N2']):
-                        record['N2'] = float(parts[idx])
-                    elif _np.isnan(record['N5']):
-                        record['N5'] = float(parts[idx])
-                except ValueError:
-                    pass
-                idx += 1
-
-        records.append(record)
-
-    if not records:
-        return _pd.DataFrame()
-
-    # Create DataFrame
-    df = _pd.DataFrame(records)
-
-    # Convert GPS week/sec to J2000 time
-    df['TIME'] = _gn_datetime.gpsweeksec2datetime(gps_week=df['week'], tow=df['sec'], as_j2000=True)
-
-    # Drop week/sec and rename prn
-    df = df.drop(columns=['week', 'sec'])
-    df = df.rename(columns={'prn': 'PRN'})
-
-    return df.set_index(['TIME', 'PRN'])
-
-
-def _read_trace_measurement_issues(path_or_bytes):
-    """Extract LARGE MEAS and Measurement Deweighted events from network TRACE file.
-
-    These events occur together - when a measurement has a large error, it gets deweighted.
-    This function extracts both and combines them into a single DataFrame.
-
-    LARGE MEAS format:
-    2019-01-01 00:04:00.00    LARGE MEAS    ERROR OF : 7.59618    AT 44 :     PHAS_MEAS     E12    ALIC        L1C
-
-    Measurement Deweighted format:
-    2019-01-01 00:04:00.00    Measurement Deweighted      - Postfit     PHAS_MEAS     E12    ALIC        L1C
-        - PostfitResidual: 0.017939    - preDeweightSigma: 0.003146    - postDeweightSigma: 3.145524
-
-    Parameters
-    ----------
-    path_or_bytes : str or bytes or Path
-        Path to network TRACE file or file bytes
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame indexed by [TIME, SITE, SAT, TYPE, CODE] with columns:
-        - large_meas_error: Error value from LARGE MEAS line (if present)
-        - large_meas_index: Index from LARGE MEAS line (if present)
-        - fit_type: 'postfit' or 'prefit' from Deweighted line (if present)
-        - postfit_residual: Residual value (if present)
-        - pre_deweight_sigma: Sigma before deweighting (if present)
-        - post_deweight_sigma: Sigma after deweighting (if present)
-    """
-    # Read file content
-    if isinstance(path_or_bytes, bytes):
-        content = path_or_bytes.decode('utf-8')
-    else:
-        # Handle str, Path, or any path-like object
-        with open(path_or_bytes, 'r') as f:
-            content = f.read()
-
-    large_meas_records = []
-    deweighted_records = []
-
-    # Parse both types of events
-    for line in content.splitlines():
-        # Check for LARGE MEAS
-        match = _RE_LARGE_MEAS.search(line)
-        if match:
-            from datetime import datetime
-            timestamp_str, error_val, index_val, meas_type, sat, site, code = match.groups()
-            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
-            dt64 = _np.datetime64(dt)
-            j2000_time = _gn_datetime.datetime2j2000(dt64)
-
-            large_meas_records.append({
-                'TIME': j2000_time,
-                'SITE': site.upper(),
-                'SAT': sat.upper(),
-                'TYPE': meas_type.upper(),
-                'CODE': code.upper(),
-                'large_meas_error': float(error_val),
-                'large_meas_index': int(index_val)
-            })
-            continue
-
-        # Check for Measurement Deweighted
-        match = _RE_MEAS_DEWEIGHTED.search(line)
-        if match:
-            from datetime import datetime
-            timestamp_str, fit_type, meas_type, sat, site, code, postfit_res, pre_sigma, post_sigma = match.groups()
-            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
-            dt64 = _np.datetime64(dt)
-            j2000_time = _gn_datetime.datetime2j2000(dt64)
-
-            deweighted_records.append({
-                'TIME': j2000_time,
-                'SITE': site.upper(),
-                'SAT': sat.upper(),
-                'TYPE': meas_type.upper(),
-                'CODE': code.upper(),
-                'fit_type': fit_type.lower(),
-                'postfit_residual': float(postfit_res),
-                'pre_deweight_sigma': float(pre_sigma),
-                'post_deweight_sigma': float(post_sigma)
-            })
-
-    # Combine the two DataFrames
-    dfs_to_merge = []
-
-    if large_meas_records:
-        large_meas_df = _pd.DataFrame(large_meas_records)
-        large_meas_df = large_meas_df.set_index(['TIME', 'SITE', 'SAT', 'TYPE', 'CODE'])
-        dfs_to_merge.append(large_meas_df)
-
-    if deweighted_records:
-        deweighted_df = _pd.DataFrame(deweighted_records)
-        deweighted_df = deweighted_df.set_index(['TIME', 'SITE', 'SAT', 'TYPE', 'CODE'])
-        dfs_to_merge.append(deweighted_df)
-
-    if not dfs_to_merge:
-        return _pd.DataFrame()
-
-    # Merge on common index (outer join to keep all records even if one type is missing)
-    if len(dfs_to_merge) == 2:
-        combined_df = dfs_to_merge[0].join(dfs_to_merge[1], how='outer')
-    else:
-        combined_df = dfs_to_merge[0]
-
-    return combined_df
-
-
-def _read_trace_ambiguity_removed(path_or_bytes):
-    """Extract Ambiguity Removed PREPROC events from network TRACE file.
-
-    These events indicate when ambiguities were removed during preprocessing
-    due to cycle slip detection (GF, MW, LLI, SCDIA) or single-frequency issues.
-
-    Format:
-    2019-01-01 01:24:00.00    Ambiguity Removed           - PREPROC     AMBIGUITY     R24    ALIC        L1C    - GF    - MW
-
-    Parameters
-    ----------
-    path_or_bytes : str or bytes or Path
-        Path to network TRACE file or file bytes
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame indexed by [TIME, SITE, SAT, CODE] with columns:
-        - reasons: String containing all removal reasons (e.g., "GF, MW, LLI")
-    """
-    # Read file content
-    if isinstance(path_or_bytes, bytes):
-        content = path_or_bytes.decode('utf-8')
-    else:
-        # Handle str, Path, or any path-like object
-        with open(path_or_bytes, 'r') as f:
-            content = f.read()
-
-    records = []
-
-    # Parse ambiguity removal events
-    for line in content.splitlines():
-        match = _RE_AMB_REMOVED.search(line)
-        if match:
-            from datetime import datetime
-            timestamp_str, sat, site, code, reasons_str = match.groups()
-            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
-            dt64 = _np.datetime64(dt)
-            j2000_time = _gn_datetime.datetime2j2000(dt64)
-
-            # Parse reasons from the rest of the line (e.g., "- GF    - MW" -> "GF, MW")
-            reasons = []
-            for part in reasons_str.split('-'):
-                part = part.strip()
-                if part:
-                    reasons.append(part)
-            reasons_combined = ', '.join(reasons) if reasons else ''
-
-            records.append({
-                'TIME': j2000_time,
-                'SITE': site.upper(),
-                'SAT': sat.upper(),
-                'CODE': code.upper(),
-                'reasons': reasons_combined
-            })
-
-    if not records:
-        return _pd.DataFrame()
-
-    df = _pd.DataFrame(records)
-    return df.set_index(['TIME', 'SITE', 'SAT', 'CODE'])
 
 
 def squeeze_column_names(df, delimiter=None):
