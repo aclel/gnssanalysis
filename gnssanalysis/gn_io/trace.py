@@ -446,7 +446,7 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
     n2_list = []
     n5_list = []
 
-    def _token_to_float(tok: str | None) -> float:
+    def _token_to_float(tok: _Optional[str]) -> float:
         if tok is None:
             return _np.nan
         tl = tok.lower()
