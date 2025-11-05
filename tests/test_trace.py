@@ -1394,7 +1394,7 @@ class TestParseDetslp(unittest.TestCase):
             )
 
     def test_parse_detslp_skip_summary_lines(self):
-        """Test that summary lines (n=XX) are skipped"""
+        """Test that summary lines (n=XX) are skipped and duplicates are removed"""
         df = parse_detslp(trace_detslp_sample.decode().splitlines())
 
         # Count records by detector
@@ -1402,8 +1402,8 @@ class TestParseDetslp(unittest.TestCase):
         gf_count = len(df[df["detector"] == "gf"])
         ll_count = len(df[df["detector"] == "ll"])
 
-        # Should have 6 MW records (not counting n=53 line)
-        self.assertEqual(mw_count, 6, "Should have 6 MW records")
+        # Should have 5 MW records (6 lines minus 1 duplicate for R14 slip detection)
+        self.assertEqual(mw_count, 5, "Should have 5 MW records after deduplication")
 
         # Should have 6 GF records (not counting n=53 line)
         self.assertEqual(gf_count, 6, "Should have 6 GF records")

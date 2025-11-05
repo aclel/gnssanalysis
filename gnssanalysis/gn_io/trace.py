@@ -812,6 +812,13 @@ def parse_detslp(lines: _Iterable[str]) -> _pd.DataFrame:
         if col in df.columns:
             df[col] = _pd.Categorical(df[col])
 
+    # Deduplicate: when slip is detected, we get both the regular line and "slip detected" line
+    # Keep only the slip_detected=True version when duplicates exist
+    # Group by (datetime, sat, detector) and keep the row with slip_detected=True if it exists
+    df = df.sort_values('slip_detected', ascending=False)  # True comes before False
+    df = df.drop_duplicates(subset=['datetime', 'sat', 'detector'], keep='first')
+    df = df.sort_values(['datetime', 'sat', 'detector']).reset_index(drop=True)
+
     return df
 
 
