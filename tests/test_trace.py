@@ -71,14 +71,14 @@ class TestParsePdeCs(unittest.TestCase):
         # datetime should be datetime64
         self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
 
-        # sat should be object (string)
-        self.assertEqual(df["sat"].dtype, object)
+        # sat should be categorical
+        self.assertIsInstance(df["sat"].dtype, pd.CategoricalDtype)
 
-        # mode should be object (string or None)
-        self.assertEqual(df["mode"].dtype, object)
+        # mode should be categorical
+        self.assertIsInstance(df["mode"].dtype, pd.CategoricalDtype)
 
-        # flag should be object (string or None)
-        self.assertEqual(df["flag"].dtype, object)
+        # flag should be categorical
+        self.assertIsInstance(df["flag"].dtype, pd.CategoricalDtype)
 
         # Numeric columns should be float
         numeric_cols = [
@@ -1128,8 +1128,8 @@ class TestParseElevation(unittest.TestCase):
             np.issubdtype(df["el"].dtype, np.floating), "el should be float"
         )
 
-        # mode should be object
-        self.assertEqual(df["mode"].dtype, object)
+        # mode should be categorical
+        self.assertIsInstance(df["mode"].dtype, pd.CategoricalDtype)
 
     def test_parse_elevation_range(self):
         """Test that elevation values are in reasonable range"""

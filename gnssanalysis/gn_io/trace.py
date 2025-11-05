@@ -447,6 +447,8 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             return
         numeric_cols = columns[4:]
         df[numeric_cols] = df[numeric_cols].astype(_np.float32)
+        for col in ['sat', 'mode', 'flag']:
+            df[col] = _pd.Categorical(df[col])
         frames.append(df)
 
     for ln in lines:
@@ -570,6 +572,8 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
 
     df = _pd.concat(frames, ignore_index=True)
     df = df.dropna(subset=['datetime'])
+    for col in ['sat', 'mode', 'flag']:
+        df[col] = _pd.Categorical(df[col])
     return df[columns].reset_index(drop=True)
 
 
