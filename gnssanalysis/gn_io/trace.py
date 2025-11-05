@@ -507,8 +507,6 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         df = df.dropna(subset=['datetime'])
         if df.empty:
             return
-        for col in ['sat', 'mode', 'flag']:
-            df[col] = _pd.Categorical(df[col])
         frames.append(df)
 
     for ln in lines:
