@@ -422,8 +422,28 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
     ]
     frames: list[_pd.DataFrame] = []
-    chunk: list[tuple] = []
     chunk_size = 50000
+
+    # Use separate lists for each column instead of tuples to reduce memory overhead
+    datetime_list = []
+    sat_list = []
+    mode_list = []
+    flag_list = []
+    el_list = []
+    lamw_list = []
+    gf12_list = []
+    mw12_list = []
+    siggf_list = []
+    sigmw_list = []
+    lamew_list = []
+    gf25_list = []
+    mw25_list = []
+    vtpv_list = []
+    val_list = []
+    thres_list = []
+    n1_list = []
+    n2_list = []
+    n5_list = []
 
     def _token_to_float(tok: str | None) -> float:
         if tok is None:
@@ -437,16 +457,52 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             return _np.nan
 
     def flush_chunk() -> None:
-        if not chunk:
+        if not datetime_list:
             return
-        df = _pd.DataFrame(chunk, columns=columns)
-        chunk.clear()
-        df['datetime'] = _pd.to_datetime(df['datetime'], errors='coerce')
+        df = _pd.DataFrame({
+            'datetime': _pd.to_datetime(datetime_list, errors='coerce'),
+            'sat': sat_list,
+            'mode': mode_list,
+            'flag': flag_list,
+            'el': _np.array(el_list, dtype=_np.float32),
+            'lamw': _np.array(lamw_list, dtype=_np.float32),
+            'gf12': _np.array(gf12_list, dtype=_np.float32),
+            'mw12': _np.array(mw12_list, dtype=_np.float32),
+            'siggf': _np.array(siggf_list, dtype=_np.float32),
+            'sigmw': _np.array(sigmw_list, dtype=_np.float32),
+            'lamew': _np.array(lamew_list, dtype=_np.float32),
+            'gf25': _np.array(gf25_list, dtype=_np.float32),
+            'mw25': _np.array(mw25_list, dtype=_np.float32),
+            'vtpv': _np.array(vtpv_list, dtype=_np.float32),
+            'val': _np.array(val_list, dtype=_np.float32),
+            'thres': _np.array(thres_list, dtype=_np.float32),
+            'N1': _np.array(n1_list, dtype=_np.float32),
+            'N2': _np.array(n2_list, dtype=_np.float32),
+            'N5': _np.array(n5_list, dtype=_np.float32),
+        })
+        datetime_list.clear()
+        sat_list.clear()
+        mode_list.clear()
+        flag_list.clear()
+        el_list.clear()
+        lamw_list.clear()
+        gf12_list.clear()
+        mw12_list.clear()
+        siggf_list.clear()
+        sigmw_list.clear()
+        lamew_list.clear()
+        gf25_list.clear()
+        mw25_list.clear()
+        vtpv_list.clear()
+        val_list.clear()
+        thres_list.clear()
+        n1_list.clear()
+        n2_list.clear()
+        n5_list.clear()
+
         df = df.dropna(subset=['datetime'])
         if df.empty:
             return
-        numeric_cols = columns[4:]
-        df[numeric_cols] = df[numeric_cols].astype(_np.float32)
         for col in ['sat', 'mode', 'flag']:
             df[col] = _pd.Categorical(df[col])
         frames.append(df)
@@ -545,24 +601,28 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         n_values += [_np.nan] * (3 - len(n_values))
         n_values = n_values[:3]
 
-        chunk.append(
-            (
-                f"{date_token} {time_token}",
-                sat,
-                mode,
-                flag,
-                _np.float32(el_val),
-                *(_np.float32(v) for v in values),
-                _np.float32(vtpv),
-                _np.float32(val),
-                _np.float32(thres),
-                _np.float32(n_values[0]),
-                _np.float32(n_values[1]),
-                _np.float32(n_values[2]),
-            )
-        )
+        # Append to individual lists instead of creating tuples
+        datetime_list.append(f"{date_token} {time_token}")
+        sat_list.append(sat)
+        mode_list.append(mode)
+        flag_list.append(flag)
+        el_list.append(el_val)
+        lamw_list.append(values[0])
+        gf12_list.append(values[1])
+        mw12_list.append(values[2])
+        siggf_list.append(values[3])
+        sigmw_list.append(values[4])
+        lamew_list.append(values[5])
+        gf25_list.append(values[6])
+        mw25_list.append(values[7])
+        vtpv_list.append(vtpv)
+        val_list.append(val)
+        thres_list.append(thres)
+        n1_list.append(n_values[0])
+        n2_list.append(n_values[1])
+        n5_list.append(n_values[2])
 
-        if len(chunk) >= chunk_size:
+        if len(datetime_list) >= chunk_size:
             flush_chunk()
 
     flush_chunk()
