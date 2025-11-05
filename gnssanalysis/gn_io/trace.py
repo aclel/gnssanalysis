@@ -422,10 +422,11 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         'lamew', 'gf25', 'mw25', 'vtpv', 'val', 'thres', 'N1', 'N2', 'N5'
     ]
     frames: list[_pd.DataFrame] = []
-    chunk_size = 50000
+    chunk_size = 10000  # Reduced from 50000 to flush more frequently and reduce peak memory
 
     # Use separate lists for each column instead of tuples to reduce memory overhead
-    datetime_list = []
+    date_list = []
+    time_list = []
     sat_list = []
     mode_list = []
     flag_list = []
@@ -457,10 +458,12 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             return _np.nan
 
     def flush_chunk() -> None:
-        if not datetime_list:
+        if not date_list:
             return
+        # Combine date and time lists into datetime strings
+        datetime_strs = [f"{d} {t}" for d, t in zip(date_list, time_list)]
         df = _pd.DataFrame({
-            'datetime': _pd.to_datetime(datetime_list, errors='coerce'),
+            'datetime': _pd.to_datetime(datetime_strs, errors='coerce'),
             'sat': sat_list,
             'mode': mode_list,
             'flag': flag_list,
@@ -480,7 +483,8 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
             'N2': _np.array(n2_list, dtype=_np.float32),
             'N5': _np.array(n5_list, dtype=_np.float32),
         })
-        datetime_list.clear()
+        date_list.clear()
+        time_list.clear()
         sat_list.clear()
         mode_list.clear()
         flag_list.clear()
@@ -602,7 +606,8 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         n_values = n_values[:3]
 
         # Append to individual lists instead of creating tuples
-        datetime_list.append(f"{date_token} {time_token}")
+        date_list.append(date_token)
+        time_list.append(time_token)
         sat_list.append(sat)
         mode_list.append(mode)
         flag_list.append(flag)
@@ -622,7 +627,7 @@ def parse_pde_cs(lines: _Iterable[str]) -> _pd.DataFrame:
         n2_list.append(n_values[1])
         n5_list.append(n_values[2])
 
-        if len(datetime_list) >= chunk_size:
+        if len(date_list) >= chunk_size:
             flush_chunk()
 
     flush_chunk()
