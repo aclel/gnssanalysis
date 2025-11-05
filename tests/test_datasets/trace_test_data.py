@@ -204,3 +204,33 @@ trace_ambiguity_resets_sample = b"""
 2025-10-10 23:54:30.00	Ambiguity Removed       	- PREPROC	 AMBIGUITY	 E16	TONG	    L1C	- GF
 2025-10-10 23:54:30.00	Ambiguity Removed       	- PREPROC	 AMBIGUITY	 E16	TONG	    L5Q	- GF
 """
+
+# Sample TRACE file with detslp (cycle slip detection) blocks
+# Includes Melbourne-Wübbena (MW), Geometry-Free (GF), and Loss-of-Lock (LL) detections
+trace_detslp_sample = b"""
+detslp_mw: epoch=2025-10-05 17:31:30.00 sat=E21 mw0=-0.510183 mw1=-1.049210
+detslp_mw: epoch=2025-10-05 17:31:30.00 sat=E08 mw0=129.136976 mw1=129.466777
+detslp_mw: epoch=2025-10-05 17:31:30.00 sat=R14 mw0=-65.120641 mw1=-44.321635
+detslp_mw: slip detected: epoch=2025-10-05 17:31:30.00 sat=R14 mw0=-65.120641 mw1=-44.321635
+detslp_mw: epoch=2025-10-05 17:31:30.00 sat=E18 mw0=0.261886 mw1=1.201919
+detslp_mw: epoch=2025-10-05 17:31:30.00 sat=R27 mw0=-63.772798 mw1=-62.089077
+detslp_ll: n=53
+detslp_ll: slip detected: epoch=2025-10-05 17:32:00.00 sat=G01 f=F5
+detslp_gf: n=53
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=G08 gf0=-5.693530 gf1=-5.680146
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=G02 gf0=4.881156 gf1=4.897541
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=E27 gf0=-27.418274 gf1=-27.405408
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=E30 gf0=-61.742250 gf1=-61.701717
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=G04 gf0=0.322484 gf1=0.336804
+detslp_gf: epoch=2025-10-05 17:32:00.00 sat=G03 gf0=0.564167 gf1=0.603729
+"""
+
+# Empty TRACE file without detslp section
+trace_no_detslp = b"""
++STATES
+Some state data here
+-STATES
++RESIDUALS
+Some residual data here
+-RESIDUALS
+"""

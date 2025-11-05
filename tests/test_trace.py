@@ -14,6 +14,7 @@ from gnssanalysis.gn_io.trace import (
     parse_large_errors,
     parse_ambiguity_resets,
     parse_elevation,
+    parse_detslp,
 )
 from test_datasets.trace_test_data import (
     trace_pde_cs_sample,
@@ -23,6 +24,8 @@ from test_datasets.trace_test_data import (
     trace_residual_lines_sample,
     trace_large_errors_sample,
     trace_ambiguity_resets_sample,
+    trace_detslp_sample,
+    trace_no_detslp,
 )
 
 
@@ -1186,6 +1189,263 @@ class TestParseElevation(unittest.TestCase):
         # Should return empty DataFrame
         self.assertIsInstance(df, pd.DataFrame)
         self.assertEqual(len(df), 0, "Should return empty DataFrame for no PDE-CS data")
+
+
+class TestParseDetslp(unittest.TestCase):
+    """Tests for parse_detslp function"""
+
+    def test_parse_detslp_basic(self):
+        """Test basic reading of detslp data"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Check that we got a DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+
+        # Check that it's not empty
+        self.assertGreater(len(df), 0, "DataFrame should contain detslp records")
+
+        # Check for expected columns
+        expected_columns = [
+            "datetime",
+            "sat",
+            "detector",
+            "slip_detected",
+            "mw0",
+            "mw1",
+            "gf0",
+            "gf1",
+            "f",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' not found")
+
+    def test_parse_detslp_column_types(self):
+        """Test that columns have the correct data types"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # datetime should be datetime64
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
+
+        # sat should be categorical
+        self.assertIsInstance(df["sat"].dtype, pd.CategoricalDtype)
+
+        # detector should be categorical
+        self.assertIsInstance(df["detector"].dtype, pd.CategoricalDtype)
+
+        # slip_detected should be bool
+        self.assertEqual(df["slip_detected"].dtype, bool)
+
+        # Numeric columns should be float
+        numeric_cols = ["mw0", "mw1", "gf0", "gf1"]
+        for col in numeric_cols:
+            self.assertTrue(
+                np.issubdtype(df[col].dtype, np.floating),
+                f"Column '{col}' should be float type",
+            )
+
+    def test_parse_detslp_mw_records(self):
+        """Test parsing of MW (Melbourne-Wübbena) records"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Filter for MW records
+        mw_records = df[df["detector"] == "mw"]
+        self.assertGreater(len(mw_records), 0, "Should have MW records")
+
+        # Check that MW records have mw0 and mw1 values
+        self.assertTrue(mw_records["mw0"].notna().all(), "MW records should have mw0")
+        self.assertTrue(mw_records["mw1"].notna().all(), "MW records should have mw1")
+
+        # Check that MW records don't have gf or f values
+        self.assertTrue(mw_records["gf0"].isna().all(), "MW records should not have gf0")
+        self.assertTrue(mw_records["gf1"].isna().all(), "MW records should not have gf1")
+        self.assertTrue(mw_records["f"].isna().all(), "MW records should not have f")
+
+    def test_parse_detslp_mw_slip_detection(self):
+        """Test that MW slip detection is correctly identified"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Find R14 slip detection
+        r14_slip = df[(df["sat"] == "R14") & (df["slip_detected"] == True)]
+        self.assertEqual(len(r14_slip), 1, "Should have one R14 slip detection")
+
+        # Check values
+        rec = r14_slip.iloc[0]
+        self.assertAlmostEqual(rec["mw0"], -65.120641, places=5)
+        self.assertAlmostEqual(rec["mw1"], -44.321635, places=5)
+        self.assertEqual(rec["detector"], "mw")
+
+    def test_parse_detslp_mw_no_slip(self):
+        """Test MW records without slip detection"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Find E21 (no slip)
+        e21_records = df[(df["sat"] == "E21") & (df["detector"] == "mw")]
+        self.assertEqual(len(e21_records), 1, "Should have one E21 MW record")
+
+        rec = e21_records.iloc[0]
+        self.assertFalse(rec["slip_detected"], "E21 should not have slip detected")
+        self.assertAlmostEqual(rec["mw0"], -0.510183, places=5)
+        self.assertAlmostEqual(rec["mw1"], -1.049210, places=5)
+
+    def test_parse_detslp_gf_records(self):
+        """Test parsing of GF (geometry-free) records"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Filter for GF records
+        gf_records = df[df["detector"] == "gf"]
+        self.assertGreater(len(gf_records), 0, "Should have GF records")
+
+        # Check that GF records have gf0 and gf1 values
+        self.assertTrue(gf_records["gf0"].notna().all(), "GF records should have gf0")
+        self.assertTrue(gf_records["gf1"].notna().all(), "GF records should have gf1")
+
+        # Check that GF records don't have mw or f values
+        self.assertTrue(gf_records["mw0"].isna().all(), "GF records should not have mw0")
+        self.assertTrue(gf_records["mw1"].isna().all(), "GF records should not have mw1")
+        self.assertTrue(gf_records["f"].isna().all(), "GF records should not have f")
+
+    def test_parse_detslp_gf_specific_satellite(self):
+        """Test parsing of specific GF satellite record"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Find G02 GF record
+        g02_gf = df[(df["sat"] == "G02") & (df["detector"] == "gf")]
+        self.assertEqual(len(g02_gf), 1, "Should have one G02 GF record")
+
+        rec = g02_gf.iloc[0]
+        self.assertAlmostEqual(rec["gf0"], 4.881156, places=5)
+        self.assertAlmostEqual(rec["gf1"], 4.897541, places=5)
+        self.assertFalse(rec["slip_detected"], "G02 should not have slip detected")
+
+    def test_parse_detslp_ll_records(self):
+        """Test parsing of LL (loss-of-lock) records"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Filter for LL records
+        ll_records = df[df["detector"] == "ll"]
+        self.assertGreater(len(ll_records), 0, "Should have LL records")
+
+        # LL records should all be slip detections
+        self.assertTrue(
+            ll_records["slip_detected"].all(), "All LL records should be slip detections"
+        )
+
+        # Check that LL records have f values
+        self.assertTrue(ll_records["f"].notna().all(), "LL records should have f")
+
+        # Check that LL records don't have mw or gf values
+        self.assertTrue(ll_records["mw0"].isna().all(), "LL records should not have mw0")
+        self.assertTrue(ll_records["mw1"].isna().all(), "LL records should not have mw1")
+        self.assertTrue(ll_records["gf0"].isna().all(), "LL records should not have gf0")
+        self.assertTrue(ll_records["gf1"].isna().all(), "LL records should not have gf1")
+
+    def test_parse_detslp_ll_specific_record(self):
+        """Test parsing of specific LL record"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Find G01 LL record
+        g01_ll = df[(df["sat"] == "G01") & (df["detector"] == "ll")]
+        self.assertEqual(len(g01_ll), 1, "Should have one G01 LL record")
+
+        rec = g01_ll.iloc[0]
+        self.assertEqual(rec["f"], "F5", "G01 LL should have frequency F5")
+        self.assertTrue(rec["slip_detected"], "G01 LL should be slip detection")
+
+    def test_parse_detslp_detector_types(self):
+        """Test that all detector types are present"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        detectors = df["detector"].unique()
+        self.assertIn("mw", detectors, "Should have MW detector records")
+        self.assertIn("gf", detectors, "Should have GF detector records")
+        self.assertIn("ll", detectors, "Should have LL detector records")
+
+    def test_parse_detslp_datetime_parsing(self):
+        """Test that datetime is correctly parsed"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Check datetime is set
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
+
+        # Check we have multiple time epochs
+        unique_times = df["datetime"].unique()
+        self.assertGreater(len(unique_times), 1, "Should have multiple time epochs")
+
+        # Check specific datetime
+        mw_epoch = df[df["detector"] == "mw"]["datetime"].iloc[0]
+        expected = pd.Timestamp("2025-10-05 17:31:30.00")
+        self.assertEqual(mw_epoch, expected, "MW epoch should match expected datetime")
+
+    def test_parse_detslp_sat_format(self):
+        """Test that sat values have the expected format"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        sats = df["sat"].unique()
+        self.assertGreater(len(sats), 0, "Should have sat values")
+
+        # Check format: first char is constellation, followed by 2 digits
+        for sat in sats:
+            self.assertEqual(len(sat), 3, f"sat '{sat}' should be 3 characters")
+            self.assertIn(
+                sat[0], ["G", "E", "R", "C"], f"sat '{sat}' should start with G/E/R/C"
+            )
+            self.assertTrue(
+                sat[1:].isdigit(), f"sat '{sat}' last 2 chars should be digits"
+            )
+
+    def test_parse_detslp_skip_summary_lines(self):
+        """Test that summary lines (n=XX) are skipped"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Count records by detector
+        mw_count = len(df[df["detector"] == "mw"])
+        gf_count = len(df[df["detector"] == "gf"])
+        ll_count = len(df[df["detector"] == "ll"])
+
+        # Should have 6 MW records (not counting n=53 line)
+        self.assertEqual(mw_count, 6, "Should have 6 MW records")
+
+        # Should have 6 GF records (not counting n=53 line)
+        self.assertEqual(gf_count, 6, "Should have 6 GF records")
+
+        # Should have 1 LL record (only slip detections, not n=53 line)
+        self.assertEqual(ll_count, 1, "Should have 1 LL record")
+
+    def test_parse_detslp_negative_values(self):
+        """Test that negative values are correctly parsed"""
+        df = parse_detslp(trace_detslp_sample.decode().splitlines())
+
+        # Find E27 GF record with negative values
+        e27_gf = df[(df["sat"] == "E27") & (df["detector"] == "gf")]
+        self.assertGreater(len(e27_gf), 0, "Should have E27 GF record")
+
+        rec = e27_gf.iloc[0]
+        self.assertLess(rec["gf0"], 0, "E27 gf0 should be negative")
+        self.assertLess(rec["gf1"], 0, "E27 gf1 should be negative")
+        self.assertAlmostEqual(rec["gf0"], -27.418274, places=5)
+
+    def test_parse_detslp_empty_input(self):
+        """Test behavior with content that doesn't contain detslp section"""
+        df = parse_detslp(trace_no_detslp.decode().splitlines())
+
+        # Should return empty DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 0, "Should return empty DataFrame for no detslp data")
+
+        # Should have expected columns even when empty
+        expected_columns = [
+            "datetime",
+            "sat",
+            "detector",
+            "slip_detected",
+            "mw0",
+            "mw1",
+            "gf0",
+            "gf1",
+            "f",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' in empty DataFrame")
 
 
 if __name__ == "__main__":

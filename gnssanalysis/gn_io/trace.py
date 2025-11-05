@@ -670,6 +670,151 @@ def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
     return df[['datetime', 'sat', 'el', 'mode']].copy()
 
 
+def parse_detslp(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse cycle slip detection blocks (detslp_mw, detslp_gf, detslp_ll) from station TRACE files.
+
+    These blocks contain cycle slip detection results from Melbourne-Wübbena (MW),
+    geometry-free (GF), and loss-of-lock indicator (LL) tests.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime     : pd.Timestamp — epoch timestamp
+            - sat          : str — satellite identifier
+            - detector     : str — detection method (mw, gf, ll)
+            - slip_detected: bool — True if slip was detected
+            - mw0          : float — MW value at epoch 0 (mw only)
+            - mw1          : float — MW value at epoch 1 (mw only)
+            - gf0          : float — GF value at epoch 0 (gf only)
+            - gf1          : float — GF value at epoch 1 (gf only)
+            - f            : str — frequency identifier (ll only)
+    """
+    records = []
+
+    for ln in lines:
+        if not isinstance(ln, str):
+            continue
+        line = ln.strip()
+        if not line or not line.startswith('detslp_'):
+            continue
+
+        # Skip summary lines (n=XX)
+        if 'n=' in line and 'epoch=' not in line:
+            continue
+
+        # Parse detector type
+        if line.startswith('detslp_mw:'):
+            detector = 'mw'
+            rest = line[10:].strip()
+        elif line.startswith('detslp_gf:'):
+            detector = 'gf'
+            rest = line[10:].strip()
+        elif line.startswith('detslp_ll:'):
+            detector = 'll'
+            rest = line[10:].strip()
+        else:
+            continue
+
+        # Check for slip detected line
+        is_slip = 'slip detected' in rest
+        if is_slip:
+            rest = rest.replace('slip detected:', '').strip()
+
+        # Parse key=value pairs
+        # Special handling for epoch which contains space-separated date and time
+        parts = {}
+        tokens = rest.split()
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if '=' in token:
+                key, val = token.split('=', 1)
+                # For epoch, combine with next token (time component)
+                if key == 'epoch' and i + 1 < len(tokens) and '=' not in tokens[i + 1]:
+                    val = val + ' ' + tokens[i + 1]
+                    i += 1
+                parts[key] = val
+            i += 1
+
+        # Must have epoch and sat
+        if 'epoch' not in parts or 'sat' not in parts:
+            continue
+
+        epoch_str = parts.get('epoch', '')
+        sat = parts.get('sat', '')
+
+        try:
+            epoch_dt = _pd.to_datetime(epoch_str, errors='coerce')
+        except Exception:
+            epoch_dt = _pd.NaT
+
+        # Parse detector-specific values
+        if detector == 'mw':
+            mw0 = _to_float_or_nan(parts.get('mw0', 'nan'))
+            mw1 = _to_float_or_nan(parts.get('mw1', 'nan'))
+            records.append({
+                'datetime': epoch_dt,
+                'sat': sat,
+                'detector': detector,
+                'slip_detected': is_slip,
+                'mw0': mw0,
+                'mw1': mw1,
+                'gf0': _np.nan,
+                'gf1': _np.nan,
+                'f': None,
+            })
+        elif detector == 'gf':
+            gf0 = _to_float_or_nan(parts.get('gf0', 'nan'))
+            gf1 = _to_float_or_nan(parts.get('gf1', 'nan'))
+            records.append({
+                'datetime': epoch_dt,
+                'sat': sat,
+                'detector': detector,
+                'slip_detected': is_slip,
+                'mw0': _np.nan,
+                'mw1': _np.nan,
+                'gf0': gf0,
+                'gf1': gf1,
+                'f': None,
+            })
+        elif detector == 'll':
+            f_val = parts.get('f', None)
+            records.append({
+                'datetime': epoch_dt,
+                'sat': sat,
+                'detector': detector,
+                'slip_detected': is_slip,
+                'mw0': _np.nan,
+                'mw1': _np.nan,
+                'gf0': _np.nan,
+                'gf1': _np.nan,
+                'f': f_val,
+            })
+
+    if not records:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'detector', 'slip_detected',
+            'mw0', 'mw1', 'gf0', 'gf1', 'f'
+        ])
+
+    df = _pd.DataFrame.from_records(records)
+
+    # Convert types
+    df['slip_detected'] = df['slip_detected'].astype(bool)
+    for col in ['sat', 'detector', 'f']:
+        if col in df.columns:
+            df[col] = _pd.Categorical(df[col])
+
+    return df
+
+
 def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
     """
     Filter residual DataFrame to keep only the last iteration for each observation.
