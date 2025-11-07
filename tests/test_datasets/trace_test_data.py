@@ -234,3 +234,45 @@ Some state data here
 Some residual data here
 -RESIDUALS
 """
+
+# Sample TRACE file with observation output lines
+# Contains three types: OBSERVED, MISSING, and NOT_TRACKED
+# Format: date time sat signal pseudorange carrier_phase snr elevation azimuth status
+trace_observations_sample = b"""
+2019-07-18 00:24:00.00   R16   L1C  20364111.2290 106055068.0070    43.75  49.81  94.66 OBSERVED
+2019-07-18 00:24:00.00   R16   L2C  20364112.3280  84607819.9080    43.05  49.81  94.66 OBSERVED
+2019-07-18 00:24:00.00   R16   L2P  20364112.1520  84607795.9190    42.45  49.81  94.66 OBSERVED
+2019-07-18 00:24:00.00   R20   L1C  23445641.7350 125374343.3240    38.20  12.46 347.36 OBSERVED
+2019-07-18 00:24:00.00   R20   L2C  23445644.8440  97513393.2910    37.95  12.46 347.36 OBSERVED
+2019-07-18 00:24:00.00   R20   L2P  23445642.9990  97513376.2760    38.55  12.46 347.36 OBSERVED
+2019-07-18 00:24:00.00   R21   L1C  21222571.2460 113566258.3830    48.75  36.54 292.25 OBSERVED
+2019-07-18 00:24:00.00   R21   L2C  21222571.0930  88329301.9890    45.85  36.54 292.25 OBSERVED
+2019-07-18 00:24:00.00   R21   L2P  21222570.3750  88329299.9950    45.40  36.54 292.25 OBSERVED
+2019-07-18 00:24:00.00   R22   L1C  22539885.8610 120319428.6380    47.75  20.56 228.57 OBSERVED
+2019-07-18 00:24:00.00   R22   L2C  22539886.5720  93581794.4910    43.00  20.56 228.57 OBSERVED
+2019-07-18 00:24:00.00   R22   L2P  22539885.3350  93581787.4920    42.45  20.56 228.57 OBSERVED
+2019-07-18 23:51:00.00   G18   L2S            NaN            NaN      NaN  65.23 346.34 MISSING
+2019-07-18 23:51:00.00   G22   L2S            NaN            NaN      NaN  57.15 182.11 MISSING
+2019-07-18 23:51:00.00   G23   L2S            NaN            NaN      NaN  41.72 262.73 MISSING
+2019-07-18 23:51:00.00   R06   L2C            NaN            NaN      NaN  24.80 131.03 MISSING
+2019-07-18 23:51:00.00   R06   L2P            NaN            NaN      NaN  24.80 131.03 MISSING
+2019-07-18 23:51:30.00   G11   L2S            NaN            NaN      NaN  48.32 305.25 MISSING
+2019-07-18 23:51:30.00   G14   L2S            NaN            NaN      NaN  17.41 135.54 MISSING
+2019-07-18 23:51:30.00   G16   L2S            NaN            NaN      NaN   7.73  39.77 MISSING
+2019-07-18 23:51:30.00   G18   L2S            NaN            NaN      NaN  64.98 346.54 MISSING
+2019-07-18 23:51:30.00   G22   L2S            NaN            NaN      NaN  57.29 181.77 MISSING
+2019-07-18 23:52:00.00   E01   L1C            NaN            NaN      NaN  15.30  45.20 NOT_TRACKED
+2019-07-18 23:52:00.00   E01   L5Q            NaN            NaN      NaN  15.30  45.20 NOT_TRACKED
+2019-07-18 23:52:30.00   E12   L1C            NaN            NaN      NaN  22.45 120.50 NOT_TRACKED
+2019-07-18 23:52:30.00   E12   L5Q            NaN            NaN      NaN  22.45 120.50 NOT_TRACKED
+"""
+
+# Empty TRACE file without observation lines
+trace_no_observations = b"""
++STATES
+Some state data here
+-STATES
++RESIDUALS
+Some residual data here
+-RESIDUALS
+"""

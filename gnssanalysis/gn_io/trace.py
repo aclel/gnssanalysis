@@ -670,6 +670,120 @@ def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
     return df[['datetime', 'sat', 'el', 'mode']].copy()
 
 
+def parse_observations(lines: _Iterable[str]) -> _pd.DataFrame:
+    """
+    Parse observation output lines from station TRACE files.
+
+    Handles three observation statuses:
+    - OBSERVED: Valid observations with pseudorange, carrier phase, and SNR values
+    - MISSING: Satellite is tracked but specific signal is missing (some signals present)
+    - NOT_TRACKED: Satellite is above elevation mask but not tracked at all (no signals)
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g. from open(file))
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+            - datetime      : pd.Timestamp — observation timestamp
+            - sat           : str — satellite identifier (e.g. "G18", "R06")
+            - signal        : str — signal code (e.g. "L1C", "L2S", "L2P")
+            - pseudorange   : float — pseudorange measurement (m), NaN if not observed
+            - carrier_phase : float — carrier phase measurement (cycles), NaN if not observed
+            - snr           : float — signal-to-noise ratio (dB-Hz), NaN if not observed
+            - elevation     : float — satellite elevation angle (degrees)
+            - azimuth       : float — satellite azimuth angle (degrees)
+            - status        : str — observation status ("OBSERVED", "MISSING", "NOT_TRACKED")
+
+    Examples
+    --------
+    >>> with open("station.TRACE") as f:
+    ...     df = parse_observations(f)
+    >>> observed = df[df['status'] == 'OBSERVED']
+    >>> missing = df[df['status'] == 'MISSING']
+    """
+    records = []
+
+    for ln in lines:
+        if not isinstance(ln, str):
+            continue
+        line = ln.strip()
+        if not line:
+            continue
+
+        # Split line into parts
+        parts = line.split()
+
+        # Need at least: date time sat signal ... elevation azimuth status
+        if len(parts) < 9:
+            continue
+
+        # Check if this looks like an observation line
+        # Date format: YYYY-MM-DD, Time format: HH:MM:SS.SS
+        if len(parts[0]) != 10 or parts[0].count('-') != 2:
+            continue
+        if len(parts[1]) < 8 or parts[1].count(':') != 2:
+            continue
+
+        # Parse datetime
+        dt_str = f"{parts[0]} {parts[1]}"
+        try:
+            dt = _pd.to_datetime(dt_str, errors='coerce')
+        except Exception:
+            continue
+
+        if _pd.isna(dt):
+            continue
+
+        # Parse satellite
+        sat = parts[2]
+
+        # Parse signal
+        signal = parts[3]
+
+        # Parse measurements (parts[4:7])
+        pseudorange = _to_float_or_nan(parts[4])
+        carrier_phase = _to_float_or_nan(parts[5])
+        snr = _to_float_or_nan(parts[6])
+
+        # Parse geometry
+        elevation = _to_float_or_nan(parts[7])
+        azimuth = _to_float_or_nan(parts[8])
+
+        # Parse status (last field)
+        status = parts[9] if len(parts) > 9 else "UNKNOWN"
+
+        records.append({
+            'datetime': dt,
+            'sat': sat,
+            'signal': signal,
+            'pseudorange': pseudorange,
+            'carrier_phase': carrier_phase,
+            'snr': snr,
+            'elevation': elevation,
+            'azimuth': azimuth,
+            'status': status,
+        })
+
+    if not records:
+        return _pd.DataFrame(columns=[
+            'datetime', 'sat', 'signal', 'pseudorange', 'carrier_phase',
+            'snr', 'elevation', 'azimuth', 'status'
+        ])
+
+    df = _pd.DataFrame.from_records(records)
+
+    # Convert categorical columns
+    for col in ['sat', 'signal', 'status']:
+        if col in df.columns:
+            df[col] = _pd.Categorical(df[col])
+
+    return df.reset_index(drop=True)
+
+
 def parse_detslp(lines: _Iterable[str]) -> _pd.DataFrame:
     """
     Parse cycle slip detection blocks (detslp_mw, detslp_gf, detslp_ll) from station TRACE files.

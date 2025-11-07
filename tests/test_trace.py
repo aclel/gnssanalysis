@@ -15,6 +15,7 @@ from gnssanalysis.gn_io.trace import (
     parse_ambiguity_resets,
     parse_elevation,
     parse_detslp,
+    parse_observations,
 )
 from test_datasets.trace_test_data import (
     trace_pde_cs_sample,
@@ -26,6 +27,8 @@ from test_datasets.trace_test_data import (
     trace_ambiguity_resets_sample,
     trace_detslp_sample,
     trace_no_detslp,
+    trace_observations_sample,
+    trace_no_observations,
 )
 
 
@@ -1446,6 +1449,250 @@ class TestParseDetslp(unittest.TestCase):
         ]
         for col in expected_columns:
             self.assertIn(col, df.columns, f"Expected column '{col}' in empty DataFrame")
+
+
+class TestParseObservations(unittest.TestCase):
+    """Tests for parse_observations function"""
+
+    def test_parse_observations_basic(self):
+        """Test basic reading of observation data"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Check that we got a DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+
+        # Check that it's not empty
+        self.assertGreater(len(df), 0, "DataFrame should contain observation records")
+
+        # Check for expected columns
+        expected_columns = [
+            "datetime",
+            "sat",
+            "signal",
+            "pseudorange",
+            "carrier_phase",
+            "snr",
+            "elevation",
+            "azimuth",
+            "status",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' not found")
+
+    def test_parse_observations_column_types(self):
+        """Test that columns have the correct data types"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # datetime should be datetime64
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
+
+        # sat, signal, status should be categorical
+        self.assertIsInstance(df["sat"].dtype, pd.CategoricalDtype)
+        self.assertIsInstance(df["signal"].dtype, pd.CategoricalDtype)
+        self.assertIsInstance(df["status"].dtype, pd.CategoricalDtype)
+
+        # Numeric columns should be float
+        numeric_cols = ["pseudorange", "carrier_phase", "snr", "elevation", "azimuth"]
+        for col in numeric_cols:
+            self.assertTrue(
+                pd.api.types.is_float_dtype(df[col]),
+                f"Column '{col}' should be float type",
+            )
+
+    def test_parse_observations_observed_status(self):
+        """Test parsing of OBSERVED status lines"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Filter for OBSERVED status
+        observed = df[df["status"] == "OBSERVED"]
+
+        # Should have 12 OBSERVED records
+        self.assertEqual(len(observed), 12, "Should have 12 OBSERVED records")
+
+        # Check that OBSERVED records have valid measurements
+        self.assertTrue(
+            observed["pseudorange"].notna().all(),
+            "OBSERVED records should have valid pseudorange",
+        )
+        self.assertTrue(
+            observed["carrier_phase"].notna().all(),
+            "OBSERVED records should have valid carrier_phase",
+        )
+        self.assertTrue(
+            observed["snr"].notna().all(), "OBSERVED records should have valid SNR"
+        )
+
+        # Check specific values for first OBSERVED record (R16 L1C)
+        first_obs = observed.iloc[0]
+        self.assertEqual(first_obs["sat"], "R16")
+        self.assertEqual(first_obs["signal"], "L1C")
+        self.assertAlmostEqual(first_obs["pseudorange"], 20364111.2290, places=4)
+        self.assertAlmostEqual(first_obs["carrier_phase"], 106055068.0070, places=4)
+        self.assertAlmostEqual(first_obs["snr"], 43.75, places=2)
+        self.assertAlmostEqual(first_obs["elevation"], 49.81, places=2)
+        self.assertAlmostEqual(first_obs["azimuth"], 94.66, places=2)
+
+    def test_parse_observations_missing_status(self):
+        """Test parsing of MISSING status lines"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Filter for MISSING status
+        missing = df[df["status"] == "MISSING"]
+
+        # Should have 10 MISSING records
+        self.assertEqual(len(missing), 10, "Should have 10 MISSING records")
+
+        # Check that MISSING records have NaN measurements
+        self.assertTrue(
+            missing["pseudorange"].isna().all(),
+            "MISSING records should have NaN pseudorange",
+        )
+        self.assertTrue(
+            missing["carrier_phase"].isna().all(),
+            "MISSING records should have NaN carrier_phase",
+        )
+        self.assertTrue(
+            missing["snr"].isna().all(), "MISSING records should have NaN SNR"
+        )
+
+        # But should have valid geometry
+        self.assertTrue(
+            missing["elevation"].notna().all(),
+            "MISSING records should have valid elevation",
+        )
+        self.assertTrue(
+            missing["azimuth"].notna().all(),
+            "MISSING records should have valid azimuth",
+        )
+
+        # Check specific values for first MISSING record (G18 L2S)
+        first_missing = missing.iloc[0]
+        self.assertEqual(first_missing["sat"], "G18")
+        self.assertEqual(first_missing["signal"], "L2S")
+        self.assertTrue(pd.isna(first_missing["pseudorange"]))
+        self.assertAlmostEqual(first_missing["elevation"], 65.23, places=2)
+        self.assertAlmostEqual(first_missing["azimuth"], 346.34, places=2)
+
+    def test_parse_observations_not_tracked_status(self):
+        """Test parsing of NOT_TRACKED status lines"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Filter for NOT_TRACKED status
+        not_tracked = df[df["status"] == "NOT_TRACKED"]
+
+        # Should have 4 NOT_TRACKED records
+        self.assertEqual(len(not_tracked), 4, "Should have 4 NOT_TRACKED records")
+
+        # Check that NOT_TRACKED records have NaN measurements
+        self.assertTrue(
+            not_tracked["pseudorange"].isna().all(),
+            "NOT_TRACKED records should have NaN pseudorange",
+        )
+        self.assertTrue(
+            not_tracked["carrier_phase"].isna().all(),
+            "NOT_TRACKED records should have NaN carrier_phase",
+        )
+        self.assertTrue(
+            not_tracked["snr"].isna().all(), "NOT_TRACKED records should have NaN SNR"
+        )
+
+        # But should have valid geometry
+        self.assertTrue(
+            not_tracked["elevation"].notna().all(),
+            "NOT_TRACKED records should have valid elevation",
+        )
+        self.assertTrue(
+            not_tracked["azimuth"].notna().all(),
+            "NOT_TRACKED records should have valid azimuth",
+        )
+
+        # Check specific values for first NOT_TRACKED record (E01 L1C)
+        first_not_tracked = not_tracked.iloc[0]
+        self.assertEqual(first_not_tracked["sat"], "E01")
+        self.assertEqual(first_not_tracked["signal"], "L1C")
+        self.assertTrue(pd.isna(first_not_tracked["pseudorange"]))
+        self.assertAlmostEqual(first_not_tracked["elevation"], 15.30, places=2)
+        self.assertAlmostEqual(first_not_tracked["azimuth"], 45.20, places=2)
+
+    def test_parse_observations_datetime_parsing(self):
+        """Test that datetime is correctly parsed"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Check first timestamp
+        first_dt = df.iloc[0]["datetime"]
+        self.assertEqual(first_dt.year, 2019)
+        self.assertEqual(first_dt.month, 7)
+        self.assertEqual(first_dt.day, 18)
+        self.assertEqual(first_dt.hour, 0)
+        self.assertEqual(first_dt.minute, 24)
+        self.assertEqual(first_dt.second, 0)
+
+        # Check last timestamp
+        last_dt = df.iloc[-1]["datetime"]
+        self.assertEqual(last_dt.year, 2019)
+        self.assertEqual(last_dt.month, 7)
+        self.assertEqual(last_dt.day, 18)
+        self.assertEqual(last_dt.hour, 23)
+        self.assertEqual(last_dt.minute, 52)
+        self.assertEqual(last_dt.second, 30)
+
+    def test_parse_observations_satellite_types(self):
+        """Test that different satellite systems are parsed correctly"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Get unique satellite systems (first character of sat identifier)
+        sat_systems = df["sat"].astype(str).str[0].unique()
+
+        # Should have GPS (G), GLONASS (R), and Galileo (E)
+        self.assertIn("G", sat_systems, "Should have GPS satellites")
+        self.assertIn("R", sat_systems, "Should have GLONASS satellites")
+        self.assertIn("E", sat_systems, "Should have Galileo satellites")
+
+    def test_parse_observations_signal_types(self):
+        """Test that different signal types are parsed correctly"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Get unique signals
+        signals = df["signal"].unique()
+
+        # Should have L1C, L2C, L2P, L2S, L5Q
+        expected_signals = ["L1C", "L2C", "L2P", "L2S", "L5Q"]
+        for sig in expected_signals:
+            self.assertIn(sig, signals, f"Should have signal type {sig}")
+
+    def test_parse_observations_empty_input(self):
+        """Test behavior with content that doesn't contain observation lines"""
+        df = parse_observations(trace_no_observations.decode().splitlines())
+
+        # Should return empty DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 0, "Should return empty DataFrame for no observation data")
+
+        # Should have expected columns even when empty
+        expected_columns = [
+            "datetime",
+            "sat",
+            "signal",
+            "pseudorange",
+            "carrier_phase",
+            "snr",
+            "elevation",
+            "azimuth",
+            "status",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' in empty DataFrame")
+
+    def test_parse_observations_status_counts(self):
+        """Test that the correct number of each status type is parsed"""
+        df = parse_observations(trace_observations_sample.decode().splitlines())
+
+        # Count each status type
+        status_counts = df["status"].value_counts()
+
+        self.assertEqual(status_counts["OBSERVED"], 12, "Should have 12 OBSERVED")
+        self.assertEqual(status_counts["MISSING"], 10, "Should have 10 MISSING")
+        self.assertEqual(status_counts["NOT_TRACKED"], 4, "Should have 4 NOT_TRACKED")
 
 
 if __name__ == "__main__":
