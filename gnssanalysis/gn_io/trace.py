@@ -307,7 +307,7 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             - combo_type  : str — combination type (zd, mp, gf, mw, wl, if)
             - code_type   : str — code type (L for phase, P for code)
             - combo_label : str — specific combination label (L1, L2, L5, gf12, etc.)
-            - value       : float — measurement value
+            - value       : float64 — measurement value in meters (high precision for GNSS measurements)
     """
     datetime_strs = []
     sat_vals = []
@@ -396,7 +396,7 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             'combo_type': combo_type_vals,
             'code_type': code_type_vals,
             'combo_label': combo_label_vals,
-            'value': _np.array(value_vals, dtype=_np.float32),
+            'value': _np.array(value_vals, dtype=_np.float64),
         }
     )
     df = df.dropna(subset=['datetime'])
@@ -405,7 +405,7 @@ def parse_lc(lines: _Iterable[str]) -> _pd.DataFrame:
             columns=['datetime', 'sat', 'combo_type', 'code_type', 'combo_label', 'value']
         )
 
-    df['value'] = df['value'].astype(_np.float32)
+    df['value'] = df['value'].astype(_np.float64)
     for col in ['sat', 'combo_type', 'code_type', 'combo_label']:
         df[col] = _pd.Categorical(df[col])
 
