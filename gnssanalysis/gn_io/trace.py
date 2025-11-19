@@ -684,11 +684,13 @@ _OBS_RESULT_COLUMNS = [
     "status",
 ]
 _OBS_FLOAT_COLUMNS = [
-    "pseudorange",
-    "carrier_phase",
     "snr",
     "elevation",
     "azimuth",
+]
+_OBS_FLOAT64_COLUMNS = [
+    "pseudorange",
+    "carrier_phase",
 ]
 _OBS_CHUNK_SIZE = 20000
 
@@ -777,8 +779,9 @@ def _parse_observation_chunk(chunk_lines) -> _pd.DataFrame:
     if chunk.empty:
         return _empty_observation_df()
 
-    # Convert float columns to float32 (vectorized)
+    # Convert float columns - float32 for smaller values, float64 for high-precision measurements
     chunk = chunk.astype({col: _np.float32 for col in _OBS_FLOAT_COLUMNS}, copy=False)
+    chunk = chunk.astype({col: _np.float64 for col in _OBS_FLOAT64_COLUMNS}, copy=False)
     return chunk[_OBS_RESULT_COLUMNS]
 
 
@@ -803,11 +806,11 @@ def parse_observations(lines: _Iterable[str]) -> _pd.DataFrame:
             - datetime      : pd.Timestamp — observation timestamp
             - sat           : str — satellite identifier (e.g. "G18", "R06")
             - signal        : str — signal code (e.g. "L1C", "L2S", "L2P")
-            - pseudorange   : float — pseudorange measurement (m), NaN if not observed
-            - carrier_phase : float — carrier phase measurement (cycles), NaN if not observed
-            - snr           : float — signal-to-noise ratio (dB-Hz), NaN if not observed
-            - elevation     : float — satellite elevation angle (degrees)
-            - azimuth       : float — satellite azimuth angle (degrees)
+            - pseudorange   : float64 — pseudorange measurement (m), NaN if not observed
+            - carrier_phase : float64 — carrier phase measurement (cycles), NaN if not observed
+            - snr           : float32 — signal-to-noise ratio (dB-Hz), NaN if not observed
+            - elevation     : float32 — satellite elevation angle (degrees)
+            - azimuth       : float32 — satellite azimuth angle (degrees)
             - block         : str — satellite block type (e.g. "GPS-IIIA", "GLO-M")
             - status        : str — observation status ("OBSERVED", "MISSING", "NOT_TRACKED")
 
