@@ -984,7 +984,7 @@ def download_product_from_cddis(
     if campaign == "repro3":
         start_gps_week = GPSDate(start_epoch).gpswk
         end_gps_week = GPSDate(end_epoch).gpswk
-        if int(start_gps_week) < 729 or int(end_gps_week) > 2237:
+        if int(start_gps_week) < 729 or int(start_gps_week) > 2237:
             raise ValueError(f"repro3 campaign only valid for GPS weeks 729-2237 (requested: {start_gps_week}-{end_gps_week})")
 
     # Campaign products always use long filenames with specific project codes
