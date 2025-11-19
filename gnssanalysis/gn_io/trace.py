@@ -1228,11 +1228,11 @@ def parse_residuals(
                     if forward_combined is not None and not forward_combined.empty:
                         aligned = forward_combined.reindex(sm_index.index)
                         if aligned is not None:
-                            zero_fill_cols = {"sigma"}
+                            zero_fill_cols = {"sigma", "prefit"}
                             align_cols = [
                                 col
                                 for col in sm_index.columns
-                                if col not in {"prefit", "postfit", "iter"}
+                                if col not in {"postfit", "iter"}
                                 and col in aligned.columns
                             ]
                             for col in align_cols:

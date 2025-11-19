@@ -595,8 +595,9 @@ class TestParseResiduals(unittest.TestCase):
 
             self.assertGreater(len(df), 0)
             self.assertTrue((df["trace_type"] == "smoothed").all())
-            zero_mask = df["prefit"] == 0
-            self.assertTrue(zero_mask.any(), "Smoothed results should keep zero prefit")
+            # Smoothed results should now have forward prefit values (not zero)
+            nonzero_prefit_mask = df["prefit"] != 0
+            self.assertTrue(nonzero_prefit_mask.any(), "Smoothed results should have forward prefit values")
             self.assertNotIn("datetime", df.columns)
 
             timestamps = pd.to_datetime(df["date"] + " " + df["time"])
