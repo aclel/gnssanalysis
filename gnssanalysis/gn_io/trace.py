@@ -670,19 +670,7 @@ def parse_elevation(lines: _Iterable[str]) -> _pd.DataFrame:
     return df[['datetime', 'sat', 'el', 'mode']].copy()
 
 
-_OBS_STATUS_VALUES = frozenset({"OBSERVED", "MISSING", "NOT_TRACKED"})
-_OBS_CHUNK_COLUMNS = [
-    "date",
-    "time",
-    "sat",
-    "signal",
-    "pseudorange",
-    "carrier_phase",
-    "snr",
-    "elevation",
-    "azimuth",
-    "status",
-]
+_OBS_STATUS_VALUES = frozenset({"OBSERVED", "MISSING", "CODE_ONLY", "PHASE_ONLY", "NOT_TRACKED"})
 _OBS_RESULT_COLUMNS = [
     "datetime",
     "sat",
@@ -692,6 +680,7 @@ _OBS_RESULT_COLUMNS = [
     "snr",
     "elevation",
     "azimuth",
+    "block",
     "status",
 ]
 _OBS_FLOAT_COLUMNS = [
@@ -703,6 +692,23 @@ _OBS_FLOAT_COLUMNS = [
 ]
 _OBS_CHUNK_SIZE = 20000
 
+# Regex for parsing obsRec lines - much faster than preprocessing loop
+_OBS_REC_RE = _re.compile(
+    r"""^obsRec:\s+
+        epoch=\s*(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2}\.\d+)\s+
+        sat=\s*(?P<sat>\S+)\s+
+        sig=\s*(?P<sig>\S+)\s+
+        P=\s*(?P<P>\S+)\s+
+        L=\s*(?P<L>\S+)\s+
+        S=\s*(?P<S>\S+)\s+
+        el=\s*(?P<el>\S+)\s+
+        az=\s*(?P<az>\S+)\s+
+        block=\s*(?P<block>.+?)\s+
+        status=\s*(?P<status>\S+)\s*$
+    """,
+    _re.VERBOSE,
+)
+
 
 def _empty_observation_df() -> _pd.DataFrame:
     return _pd.DataFrame(columns=_OBS_RESULT_COLUMNS)
@@ -711,44 +717,57 @@ def _empty_observation_df() -> _pd.DataFrame:
 def _is_observation_line(line: str) -> bool:
     """
     Fast structural checks to decide if a line carries observation data.
+    New obsRec format: obsRec: epoch= ... status= OBSERVED
     """
     if not line or len(line) < 40:
         return False
-    if not (line[:4].isdigit() and line[4] == "-" and line[7] == "-"):
+    if not line.startswith("obsRec:"):
         return False
-    parts = line.rsplit(None, 1)
-    if len(parts) != 2:
-        return False
-    return parts[1] in _OBS_STATUS_VALUES
+    # Quick check for status at the end
+    return any(status in line for status in _OBS_STATUS_VALUES)
 
 
 def _parse_observation_chunk(chunk_lines) -> _pd.DataFrame:
     """
-    Materialize a batch of observation lines into a typed DataFrame using
-    pandas' C tokenizer (significantly faster than Python-level splitting).
+    Materialize a batch of observation lines into a typed DataFrame.
+    Uses compiled regex for fast extraction of obsRec format.
     """
     if not chunk_lines:
         return _empty_observation_df()
 
-    buffer = _StringIO("\n".join(chunk_lines))
-    chunk = _pd.read_csv(
-        buffer,
-        sep=r"\s+",
-        header=None,
-        names=_OBS_CHUNK_COLUMNS,
-        usecols=range(len(_OBS_CHUNK_COLUMNS)),
-        engine="c",
-        na_values=["nan", "NaN", "NAN"],
-    )
+    # Parse all lines with compiled regex (very fast - single pass, C implementation)
+    records = []
+    for line in chunk_lines:
+        m = _OBS_REC_RE.match(line)
+        if not m:
+            continue
+        gd = m.groupdict()
+        records.append({
+            "date": gd["date"],
+            "time": gd["time"],
+            "sat": gd["sat"].strip(),
+            "signal": gd["sig"].strip(),
+            "pseudorange": _to_float_or_nan(gd["P"]),
+            "carrier_phase": _to_float_or_nan(gd["L"]),
+            "snr": _to_float_or_nan(gd["S"]),
+            "elevation": _to_float_or_nan(gd["el"]),
+            "azimuth": _to_float_or_nan(gd["az"]),
+            "block": gd["block"].strip(),
+            "status": gd["status"].strip(),
+        })
 
-    if chunk.empty:
+    if not records:
         return _empty_observation_df()
 
-    # Enforce expected statuses and build datetimes in bulk
+    # Build DataFrame from records (fast for moderate chunk sizes)
+    chunk = _pd.DataFrame.from_records(records)
+
+    # Enforce expected statuses
     chunk = chunk[chunk["status"].isin(_OBS_STATUS_VALUES)]
     if chunk.empty:
         return _empty_observation_df()
 
+    # Build datetimes in bulk (vectorized operation)
     chunk["datetime"] = _pd.to_datetime(
         chunk["date"] + " " + chunk["time"],
         errors="coerce",
@@ -758,13 +777,14 @@ def _parse_observation_chunk(chunk_lines) -> _pd.DataFrame:
     if chunk.empty:
         return _empty_observation_df()
 
+    # Convert float columns to float32 (vectorized)
     chunk = chunk.astype({col: _np.float32 for col in _OBS_FLOAT_COLUMNS}, copy=False)
     return chunk[_OBS_RESULT_COLUMNS]
 
 
 def parse_observations(lines: _Iterable[str]) -> _pd.DataFrame:
     """
-    Parse observation output lines from station TRACE files.
+    Parse observation output lines from station TRACE files (obsRec format).
 
     Handles three observation statuses:
     - OBSERVED: Valid observations with pseudorange, carrier phase, and SNR values
@@ -788,6 +808,7 @@ def parse_observations(lines: _Iterable[str]) -> _pd.DataFrame:
             - snr           : float — signal-to-noise ratio (dB-Hz), NaN if not observed
             - elevation     : float — satellite elevation angle (degrees)
             - azimuth       : float — satellite azimuth angle (degrees)
+            - block         : str — satellite block type (e.g. "GPS-IIIA", "GLO-M")
             - status        : str — observation status ("OBSERVED", "MISSING", "NOT_TRACKED")
 
     Examples
@@ -827,7 +848,7 @@ def parse_observations(lines: _Iterable[str]) -> _pd.DataFrame:
     if df.empty:
         return _empty_observation_df()
 
-    for col in ['sat', 'signal', 'status']:
+    for col in ['sat', 'signal', 'block', 'status']:
         df[col] = _pd.Categorical(df[col])
 
     return df.reset_index(drop=True)

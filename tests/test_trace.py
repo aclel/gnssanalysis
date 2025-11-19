@@ -1474,6 +1474,7 @@ class TestParseObservations(unittest.TestCase):
             "snr",
             "elevation",
             "azimuth",
+            "block",
             "status",
         ]
         for col in expected_columns:
@@ -1486,9 +1487,10 @@ class TestParseObservations(unittest.TestCase):
         # datetime should be datetime64
         self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
 
-        # sat, signal, status should be categorical
+        # sat, signal, block, status should be categorical
         self.assertIsInstance(df["sat"].dtype, pd.CategoricalDtype)
         self.assertIsInstance(df["signal"].dtype, pd.CategoricalDtype)
+        self.assertIsInstance(df["block"].dtype, pd.CategoricalDtype)
         self.assertIsInstance(df["status"].dtype, pd.CategoricalDtype)
 
         # Numeric columns should be float
@@ -1678,6 +1680,7 @@ class TestParseObservations(unittest.TestCase):
             "snr",
             "elevation",
             "azimuth",
+            "block",
             "status",
         ]
         for col in expected_columns:

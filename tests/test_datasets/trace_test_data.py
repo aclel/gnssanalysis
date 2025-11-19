@@ -239,32 +239,32 @@ Some residual data here
 # Contains three types: OBSERVED, MISSING, and NOT_TRACKED
 # Format: date time sat signal pseudorange carrier_phase snr elevation azimuth status
 trace_observations_sample = b"""
-2019-07-18 00:24:00.00   R16   L1C  20364111.2290 106055068.0070    43.75  49.81  94.66 OBSERVED
-2019-07-18 00:24:00.00   R16   L2C  20364112.3280  84607819.9080    43.05  49.81  94.66 OBSERVED
-2019-07-18 00:24:00.00   R16   L2P  20364112.1520  84607795.9190    42.45  49.81  94.66 OBSERVED
-2019-07-18 00:24:00.00   R20   L1C  23445641.7350 125374343.3240    38.20  12.46 347.36 OBSERVED
-2019-07-18 00:24:00.00   R20   L2C  23445644.8440  97513393.2910    37.95  12.46 347.36 OBSERVED
-2019-07-18 00:24:00.00   R20   L2P  23445642.9990  97513376.2760    38.55  12.46 347.36 OBSERVED
-2019-07-18 00:24:00.00   R21   L1C  21222571.2460 113566258.3830    48.75  36.54 292.25 OBSERVED
-2019-07-18 00:24:00.00   R21   L2C  21222571.0930  88329301.9890    45.85  36.54 292.25 OBSERVED
-2019-07-18 00:24:00.00   R21   L2P  21222570.3750  88329299.9950    45.40  36.54 292.25 OBSERVED
-2019-07-18 00:24:00.00   R22   L1C  22539885.8610 120319428.6380    47.75  20.56 228.57 OBSERVED
-2019-07-18 00:24:00.00   R22   L2C  22539886.5720  93581794.4910    43.00  20.56 228.57 OBSERVED
-2019-07-18 00:24:00.00   R22   L2P  22539885.3350  93581787.4920    42.45  20.56 228.57 OBSERVED
-2019-07-18 23:51:00.00   G18   L2S            NaN            NaN      NaN  65.23 346.34 MISSING
-2019-07-18 23:51:00.00   G22   L2S            NaN            NaN      NaN  57.15 182.11 MISSING
-2019-07-18 23:51:00.00   G23   L2S            NaN            NaN      NaN  41.72 262.73 MISSING
-2019-07-18 23:51:00.00   R06   L2C            NaN            NaN      NaN  24.80 131.03 MISSING
-2019-07-18 23:51:00.00   R06   L2P            NaN            NaN      NaN  24.80 131.03 MISSING
-2019-07-18 23:51:30.00   G11   L2S            NaN            NaN      NaN  48.32 305.25 MISSING
-2019-07-18 23:51:30.00   G14   L2S            NaN            NaN      NaN  17.41 135.54 MISSING
-2019-07-18 23:51:30.00   G16   L2S            NaN            NaN      NaN   7.73  39.77 MISSING
-2019-07-18 23:51:30.00   G18   L2S            NaN            NaN      NaN  64.98 346.54 MISSING
-2019-07-18 23:51:30.00   G22   L2S            NaN            NaN      NaN  57.29 181.77 MISSING
-2019-07-18 23:52:00.00   E01   L1C            NaN            NaN      NaN  15.30  45.20 NOT_TRACKED
-2019-07-18 23:52:00.00   E01   L5Q            NaN            NaN      NaN  15.30  45.20 NOT_TRACKED
-2019-07-18 23:52:30.00   E12   L1C            NaN            NaN      NaN  22.45 120.50 NOT_TRACKED
-2019-07-18 23:52:30.00   E12   L5Q            NaN            NaN      NaN  22.45 120.50 NOT_TRACKED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R16 sig= L1C P= 20364111.2290 L= 106055068.0070 S= 43.75 el= 49.81 az= 94.66 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R16 sig= L2C P= 20364112.3280 L= 84607819.9080 S= 43.05 el= 49.81 az= 94.66 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R16 sig= L2P P= 20364112.1520 L= 84607795.9190 S= 42.45 el= 49.81 az= 94.66 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R20 sig= L1C P= 23445641.7350 L= 125374343.3240 S= 38.20 el= 12.46 az= 347.36 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R20 sig= L2C P= 23445644.8440 L= 97513393.2910 S= 37.95 el= 12.46 az= 347.36 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R20 sig= L2P P= 23445642.9990 L= 97513376.2760 S= 38.55 el= 12.46 az= 347.36 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R21 sig= L1C P= 21222571.2460 L= 113566258.3830 S= 48.75 el= 36.54 az= 292.25 block= GLO-K1B status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R21 sig= L2C P= 21222571.0930 L= 88329301.9890 S= 45.85 el= 36.54 az= 292.25 block= GLO-K1B status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R21 sig= L2P P= 21222570.3750 L= 88329299.9950 S= 45.40 el= 36.54 az= 292.25 block= GLO-K1B status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R22 sig= L1C P= 22539885.8610 L= 120319428.6380 S= 47.75 el= 20.56 az= 228.57 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R22 sig= L2C P= 22539886.5720 L= 93581794.4910 S= 43.00 el= 20.56 az= 228.57 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 00:24:00.00 sat= R22 sig= L2P P= 22539885.3350 L= 93581787.4920 S= 42.45 el= 20.56 az= 228.57 block= GLO-M status= OBSERVED
+obsRec: epoch= 2019-07-18 23:51:00.00 sat= G18 sig= L2S P= NaN L= NaN S= NaN el= 65.23 az= 346.34 block= GPS-IIF status= MISSING
+obsRec: epoch= 2019-07-18 23:51:00.00 sat= G22 sig= L2S P= NaN L= NaN S= NaN el= 57.15 az= 182.11 block= GPS-IIR-M status= MISSING
+obsRec: epoch= 2019-07-18 23:51:00.00 sat= G23 sig= L2S P= NaN L= NaN S= NaN el= 41.72 az= 262.73 block= GPS-IIIA status= MISSING
+obsRec: epoch= 2019-07-18 23:51:00.00 sat= R06 sig= L2C P= NaN L= NaN S= NaN el= 24.80 az= 131.03 block= GLO-M status= MISSING
+obsRec: epoch= 2019-07-18 23:51:00.00 sat= R06 sig= L2P P= NaN L= NaN S= NaN el= 24.80 az= 131.03 block= GLO-M status= MISSING
+obsRec: epoch= 2019-07-18 23:51:30.00 sat= G11 sig= L2S P= NaN L= NaN S= NaN el= 48.32 az= 305.25 block= GPS-IIF status= MISSING
+obsRec: epoch= 2019-07-18 23:51:30.00 sat= G14 sig= L2S P= NaN L= NaN S= NaN el= 17.41 az= 135.54 block= GPS-IIR-M status= MISSING
+obsRec: epoch= 2019-07-18 23:51:30.00 sat= G16 sig= L2S P= NaN L= NaN S= NaN el= 7.73 az= 39.77 block= GPS-IIR-M status= MISSING
+obsRec: epoch= 2019-07-18 23:51:30.00 sat= G18 sig= L2S P= NaN L= NaN S= NaN el= 64.98 az= 346.54 block= GPS-IIF status= MISSING
+obsRec: epoch= 2019-07-18 23:51:30.00 sat= G22 sig= L2S P= NaN L= NaN S= NaN el= 57.29 az= 181.77 block= GPS-IIR-M status= MISSING
+obsRec: epoch= 2019-07-18 23:52:00.00 sat= E01 sig= L1C P= NaN L= NaN S= NaN el= 15.30 az= 45.20 block= GAL-1 status= NOT_TRACKED
+obsRec: epoch= 2019-07-18 23:52:00.00 sat= E01 sig= L5Q P= NaN L= NaN S= NaN el= 15.30 az= 45.20 block= GAL-1 status= NOT_TRACKED
+obsRec: epoch= 2019-07-18 23:52:30.00 sat= E12 sig= L1C P= NaN L= NaN S= NaN el= 22.45 az= 120.50 block= GAL-1 status= NOT_TRACKED
+obsRec: epoch= 2019-07-18 23:52:30.00 sat= E12 sig= L5Q P= NaN L= NaN S= NaN el= 22.45 az= 120.50 block= GAL-1 status= NOT_TRACKED
 """
 
 # Empty TRACE file without observation lines
