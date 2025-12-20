@@ -16,6 +16,7 @@ from gnssanalysis.gn_io.trace import (
     parse_elevation,
     parse_detslp,
     parse_observations,
+    parse_trop_states,
 )
 from test_datasets.trace_test_data import (
     trace_pde_cs_sample,
@@ -29,6 +30,9 @@ from test_datasets.trace_test_data import (
     trace_no_detslp,
     trace_observations_sample,
     trace_no_observations,
+    trace_trop_smoothed_sample,
+    trace_trop_forward_sample,
+    trace_no_trop,
 )
 
 
@@ -1697,6 +1701,157 @@ class TestParseObservations(unittest.TestCase):
         self.assertEqual(status_counts["OBSERVED"], 12, "Should have 12 OBSERVED")
         self.assertEqual(status_counts["MISSING"], 10, "Should have 10 MISSING")
         self.assertEqual(status_counts["NOT_TRACKED"], 4, "Should have 4 NOT_TRACKED")
+
+
+class TestParseTropStates(unittest.TestCase):
+    """Tests for parse_trop_states function"""
+
+    def test_parse_trop_smoothed_basic(self):
+        """Test basic parsing of smoothed troposphere data"""
+        df = parse_trop_states(
+            trace_trop_smoothed_sample.decode().splitlines(),
+            block_name="STATES/PPP_RTS"
+        )
+
+        # Check that we got a DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+
+        # Check that it's not empty
+        self.assertGreater(len(df), 0, "DataFrame should contain trop records")
+
+        # Check for expected columns (wide format)
+        expected_columns = [
+            "datetime",
+            "site",
+            "TROP",
+            "TROP_STD",
+            "TROP_GRAD_E",
+            "TROP_GRAD_E_STD",
+            "TROP_GRAD_N",
+            "TROP_GRAD_N_STD",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' not found")
+
+    def test_parse_trop_smoothed_row_count(self):
+        """Test that we get one row per epoch"""
+        df = parse_trop_states(
+            trace_trop_smoothed_sample.decode().splitlines(),
+            block_name="STATES/PPP_RTS"
+        )
+
+        # Should have 3 epochs (00:00:00, 00:00:30, 00:01:00)
+        self.assertEqual(len(df), 3, "Should have 3 epochs")
+
+    def test_parse_trop_smoothed_values(self):
+        """Test that trop values are parsed correctly"""
+        df = parse_trop_states(
+            trace_trop_smoothed_sample.decode().splitlines(),
+            block_name="STATES/PPP_RTS"
+        )
+
+        # Check first row values
+        first_row = df.iloc[0]
+        self.assertEqual(first_row["site"], "ALIC")
+        self.assertAlmostEqual(first_row["TROP"], 2.2833839, places=6)
+        self.assertAlmostEqual(first_row["TROP_STD"], 0.00194416, places=8)
+        self.assertAlmostEqual(first_row["TROP_GRAD_E"], 9.426e-04, places=7)
+        self.assertAlmostEqual(first_row["TROP_GRAD_E_STD"], 0.00012547, places=8)
+        self.assertAlmostEqual(first_row["TROP_GRAD_N"], -5.585e-04, places=7)
+        self.assertAlmostEqual(first_row["TROP_GRAD_N_STD"], 0.00014662, places=8)
+
+    def test_parse_trop_forward_with_keep_last(self):
+        """Test that keep_last_iteration filters to last iteration"""
+        df = parse_trop_states(
+            trace_trop_forward_sample.decode().splitlines(),
+            block_name="STATES/PPP",
+            keep_last=True
+        )
+
+        # Should have 2 epochs (00:00:00, 00:00:30)
+        self.assertEqual(len(df), 2, "Should have 2 epochs after filtering")
+
+        # Check that we kept the last iteration for first epoch (iter=2)
+        first_row = df.iloc[0]
+        self.assertAlmostEqual(first_row["TROP"], 2.2782856, places=6)
+        self.assertAlmostEqual(first_row["TROP_GRAD_E"], -8.865e-06, places=9)
+
+        # Check that we kept the last iteration for second epoch (iter=1)
+        second_row = df.iloc[1]
+        self.assertAlmostEqual(second_row["TROP"], 2.2340424, places=6)
+        self.assertAlmostEqual(second_row["TROP_GRAD_E"], 2.223e-04, places=7)
+
+    def test_parse_trop_forward_without_keep_last(self):
+        """Test parsing forward data without iteration filtering
+
+        Note: Even with keep_last=False, the pivot operation groups by
+        (datetime, site), which inherently keeps only one row per epoch.
+        The difference is that keep_last=True explicitly filters to the
+        last iteration before pivoting, while keep_last=False lets the
+        pivot operation determine which values are kept (last seen).
+        """
+        df = parse_trop_states(
+            trace_trop_forward_sample.decode().splitlines(),
+            block_name="STATES/PPP",
+            keep_last=False
+        )
+
+        # Pivot operation produces one row per (datetime, site) combination
+        # Should have 2 epochs (00:00:00, 00:00:30)
+        self.assertEqual(len(df), 2, "Should have 2 epochs after pivoting")
+
+    def test_parse_trop_no_data(self):
+        """Test parsing file without trop states returns empty DataFrame"""
+        df = parse_trop_states(
+            trace_no_trop.decode().splitlines(),
+            block_name="STATES/PPP_RTS"
+        )
+
+        # Should return empty DataFrame
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 0, "Should return empty DataFrame")
+
+        # Empty DataFrame should still have expected columns
+        expected_columns = [
+            "datetime",
+            "site",
+            "TROP",
+            "TROP_STD",
+            "TROP_GRAD_E",
+            "TROP_GRAD_E_STD",
+            "TROP_GRAD_N",
+            "TROP_GRAD_N_STD",
+        ]
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Expected column '{col}' in empty DataFrame")
+
+    def test_parse_trop_column_types(self):
+        """Test that columns have the correct data types"""
+        df = parse_trop_states(
+            trace_trop_smoothed_sample.decode().splitlines(),
+            block_name="STATES/PPP_RTS"
+        )
+
+        # datetime should be datetime64
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["datetime"]))
+
+        # site should be object (string)
+        self.assertEqual(df["site"].dtype, object)
+
+        # Numeric columns should be float
+        numeric_cols = [
+            "TROP",
+            "TROP_STD",
+            "TROP_GRAD_E",
+            "TROP_GRAD_E_STD",
+            "TROP_GRAD_N",
+            "TROP_GRAD_N_STD",
+        ]
+        for col in numeric_cols:
+            self.assertTrue(
+                pd.api.types.is_float_dtype(df[col]),
+                f"Column '{col}' should be float type"
+            )
 
 
 if __name__ == "__main__":

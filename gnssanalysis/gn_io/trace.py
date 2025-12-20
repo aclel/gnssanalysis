@@ -42,6 +42,9 @@ LINE_RE = _re.compile(
     _re.VERBOSE,
 )
 
+# Key columns for identifying unique residual observations
+_RESIDUAL_KEYS = ["datetime", "meas", "sat", "recv", "sig", "label"]
+
 # Large error regex (handles both STATE and MEAS errors)
 LARGE_RE = _re.compile(
     r"""^(?P<date>\d{4}-\d{2}-\d{2})\s+
@@ -1009,36 +1012,46 @@ def parse_detslp(lines: _Iterable[str]) -> _pd.DataFrame:
     return df
 
 
-def keep_last_iteration(df: _pd.DataFrame) -> _pd.DataFrame:
+def keep_last_iteration(df: _pd.DataFrame, keys: _Optional[list[str]] = None) -> _pd.DataFrame:
     """
-    Filter residual DataFrame to keep only the last iteration for each observation.
+    Filter DataFrame to keep only the last iteration for each observation.
 
     When TRACE files contain multiple iterations (e.g., forward + smoothed),
-    this keeps only the final iteration for each unique combination of
-    (datetime, meas, sat, recv, sig, label).
+    this keeps only the final iteration for each unique combination of key columns.
 
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame from parse_residual_lines() with 'iter' column
+        DataFrame with 'iter' column
+    keys : list[str], optional
+        Column names to use for uniqueness. If None, uses _RESIDUAL_KEYS.
 
     Returns
     -------
     pd.DataFrame
-        Filtered DataFrame with only last iterations, sorted by (datetime, sat, sig)
+        Filtered DataFrame with only last iterations, sorted by keys
 
     Examples
     --------
     >>> df = parse_residual_lines(open("trace.SUM"))
     >>> df = keep_last_iteration(df)  # Keep only final iteration
+
+    >>> # Custom keys for troposphere data
+    >>> df = keep_last_iteration(df, keys=["datetime", "site", "type", "code"])
     """
     if df.empty:
         return df
-    keys = ["datetime", "meas", "sat", "recv", "sig", "label"]
+
+    if keys is None:
+        keys = _RESIDUAL_KEYS
+
+    # Use first few keys for final sort (fallback to all keys if not enough)
+    sort_keys = keys[:min(3, len(keys))]
+
     return (
         df.sort_values(["datetime", "iter"])
           .drop_duplicates(subset=keys, keep="last")
-          .sort_values(["datetime", "sat", "sig"])
+          .sort_values(sort_keys)
           .reset_index(drop=True)
     )
 
@@ -1151,14 +1164,14 @@ def parse_residuals(
 
             df_forward = df_raw.copy()
             if forward_keep_last:
-                df_forward = keep_last_iteration(df_forward)
+                df_forward = keep_last_iteration(df_forward, keys=_RESIDUAL_KEYS)
             forward_file_cache[forward_path] = df_forward
 
-            frames_for_merge.append(keep_last_iteration(df_raw.copy()))
+            frames_for_merge.append(keep_last_iteration(df_raw.copy(), keys=_RESIDUAL_KEYS))
 
         if frames_for_merge:
             combined = _pd.concat(frames_for_merge, ignore_index=True)
-            combined = keep_last_iteration(combined)
+            combined = keep_last_iteration(combined, keys=_RESIDUAL_KEYS)
             if not combined.empty:
                 forward_group_merge[key] = combined.set_index(key_columns)
 
@@ -1212,7 +1225,7 @@ def parse_residuals(
                         continue
                     df = df_raw.copy()
                     if forward_keep_last:
-                        df = keep_last_iteration(df)
+                        df = keep_last_iteration(df, keys=_RESIDUAL_KEYS)
                     forward_file_cache[path] = df
                 df = df.copy()
             else:  # smoothed
@@ -1255,7 +1268,7 @@ def parse_residuals(
 
         if trace_type == "forward":
             if forward_keep_last:
-                df = keep_last_iteration(df)
+                df = keep_last_iteration(df, keys=_RESIDUAL_KEYS)
         elif trace_type == "smoothed" and smoothed_iteration is not None:
             df = df[df["iter"] == smoothed_iteration]
 
@@ -1282,6 +1295,235 @@ def parse_residuals(
     result = result[display_columns]
     result = result.sort_values(["date", "time", "sat", "recv", "sig", "trace_type"]).reset_index(drop=True)
     return result
+
+
+_TROP_CHUNK_SIZE = 10000
+_TROP_PIVOT_COLUMNS = [
+    "datetime", "site",
+    "TROP", "TROP_STD",
+    "TROP_GRAD_E", "TROP_GRAD_E_STD",
+    "TROP_GRAD_N", "TROP_GRAD_N_STD",
+]
+
+
+def _empty_trop_df() -> _pd.DataFrame:
+    """Return empty DataFrame with trop pivot columns."""
+    return _pd.DataFrame(columns=_TROP_PIVOT_COLUMNS)
+
+
+def parse_trop_states(
+    lines: _Iterable[str],
+    block_name: str = "STATES/PPP_RTS",
+    keep_last: bool = True,
+) -> _pd.DataFrame:
+    """
+    Parse troposphere states (TROP and TROP_GRAD) from TRACE file STATES blocks.
+
+    Returns data in wide/pivoted format ready for analysis.
+
+    Parameters
+    ----------
+    lines : Iterable[str]
+        Iterable of text lines (e.g., from open(file))
+    block_name : str, default "STATES/PPP_RTS"
+        Block to extract. Use "STATES/PPP_RTS" for smoothed files,
+        "STATES/PPP" for forward files.
+    keep_last : bool, default True
+        If True, keep only the last entry per (datetime, site, type, code).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: datetime, site, TROP, TROP_STD, TROP_GRAD_E, TROP_GRAD_E_STD,
+                 TROP_GRAD_N, TROP_GRAD_N_STD
+
+        Units: TROP in meters (zenith total delay ~2.3m),
+               TROP_GRAD in meters (typically ~1e-4 scale),
+               STD columns are standard deviations in meters.
+
+    Examples
+    --------
+    >>> with open("Network_smoothed.TRACE") as f:
+    ...     df = parse_trop_states(f, block_name="STATES/PPP_RTS")
+    >>> print(df.head())
+    """
+    blk_begin = f"+{block_name}"
+    blk_end = f"-{block_name}"
+
+    # Column lists for efficiency (like parse_pde_cs pattern)
+    iter_list: list[int] = []
+    datetime_list: list[str] = []
+    site_list: list[str] = []
+    type_list: list[str] = []
+    code_list: list[str] = []
+    state_list: list[float] = []
+    sigma_list: list[float] = []
+
+    frames: list[_pd.DataFrame] = []
+    in_block = False
+
+    def flush_chunk() -> None:
+        if not datetime_list:
+            return
+        df = _pd.DataFrame({
+            "iter": iter_list,
+            "datetime": _pd.to_datetime(datetime_list, errors="coerce"),
+            "site": site_list,
+            "type": type_list,
+            "code": code_list,
+            "state": _np.array(state_list, dtype=_np.float64),
+            "sigma": _np.array(sigma_list, dtype=_np.float64),
+        })
+        iter_list.clear()
+        datetime_list.clear()
+        site_list.clear()
+        type_list.clear()
+        code_list.clear()
+        state_list.clear()
+        sigma_list.clear()
+
+        if not df.empty:
+            frames.append(df)
+
+    for ln in lines:
+        if not isinstance(ln, str):
+            continue
+        line = ln.rstrip("\n\r")
+
+        # Track block boundaries
+        if line.startswith(blk_begin):
+            in_block = True
+            continue
+        if line.startswith(blk_end):
+            in_block = False
+            continue
+
+        if not in_block:
+            continue
+
+        # Parse data lines
+        if not line.startswith("*"):
+            continue
+
+        parts = line.split("\t")
+        if len(parts) < 9:
+            continue
+
+        # Extract fields: *  iter  datetime  type  sat  site  code  state  sigma  adjust
+        try:
+            state_type = parts[3].strip()
+            # Filter early for TROP types only
+            if state_type not in ("TROP", "TROP_GRAD"):
+                continue
+
+            iter_val = int(parts[1].strip())
+            datetime_str = parts[2].strip()
+            site = parts[5].strip()
+            code = parts[6].strip()
+            state_str = parts[7].strip()
+            sigma_str = parts[8].strip()
+        except (IndexError, ValueError):
+            continue
+
+        # Parse numeric values
+        try:
+            state_val = float(state_str) if state_str else _np.nan
+        except ValueError:
+            state_val = _np.nan
+
+        try:
+            sigma_val = float(sigma_str) if sigma_str else _np.nan
+        except ValueError:
+            sigma_val = _np.nan
+
+        # Append to column lists
+        iter_list.append(iter_val)
+        datetime_list.append(datetime_str)
+        site_list.append(site)
+        type_list.append(state_type)
+        code_list.append(code)
+        state_list.append(state_val)
+        sigma_list.append(sigma_val)
+
+        if len(datetime_list) >= _TROP_CHUNK_SIZE:
+            flush_chunk()
+
+    # Flush remaining
+    flush_chunk()
+
+    if not frames:
+        return _empty_trop_df()
+
+    df = _pd.concat(frames, ignore_index=True)
+
+    if keep_last and not df.empty:
+        # Keep last iteration per unique key (for forward files with PREDICTED + updated)
+        df = keep_last_iteration(df, keys=["datetime", "site", "type", "code"])
+
+    # Pivot to wide format
+    return _pivot_trop_states(df)
+
+
+def _pivot_trop_states(df: _pd.DataFrame) -> _pd.DataFrame:
+    """
+    Internal: Pivot troposphere states to wide format.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw parsed trop data with columns: datetime, site, type, code, state, sigma
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: datetime, site, TROP, TROP_STD, TROP_GRAD_E, TROP_GRAD_E_STD,
+                 TROP_GRAD_N, TROP_GRAD_N_STD
+    """
+    if df.empty:
+        return _empty_trop_df()
+
+    # Create combined type+code key
+    df = df.copy()
+    df["param"] = df.apply(
+        lambda r: r["type"] if r["code"] == "NONE" else f"{r['type']}_{r['code']}",
+        axis=1,
+    )
+
+    # Pivot state values
+    state_pivot = df.pivot_table(
+        index=["datetime", "site"],
+        columns="param",
+        values="state",
+        aggfunc="last",
+    )
+
+    # Pivot sigma values
+    sigma_pivot = df.pivot_table(
+        index=["datetime", "site"],
+        columns="param",
+        values="sigma",
+        aggfunc="last",
+    )
+    sigma_pivot.columns = [f"{c}_STD" for c in sigma_pivot.columns]
+
+    # Combine
+    result = _pd.concat([state_pivot, sigma_pivot], axis=1)
+
+    # Reorder columns
+    desired_order = [
+        "TROP", "TROP_STD",
+        "TROP_GRAD_E", "TROP_GRAD_E_STD",
+        "TROP_GRAD_N", "TROP_GRAD_N_STD",
+    ]
+    existing = [c for c in desired_order if c in result.columns]
+    result = result[existing]
+
+    # Flatten column index if MultiIndex
+    if isinstance(result.columns, _pd.MultiIndex):
+        result.columns = result.columns.get_level_values(0)
+
+    # Reset index to make datetime and site regular columns
+    return result.reset_index()
 
 
 # ============================================================================

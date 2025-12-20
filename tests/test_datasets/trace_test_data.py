@@ -276,3 +276,79 @@ Some state data here
 Some residual data here
 -RESIDUALS
 """
+
+# Sample TRACE file with troposphere states from STATES/PPP_RTS blocks (smoothed)
+# Real data from Ginan showing zenith tropospheric delay (TROP) and horizontal gradients (TROP_GRAD)
+# Smoothed files have single iteration (-1) with best estimates from RTS smoother
+# Each STATES/PPP_RTS block represents one epoch
+trace_trop_smoothed_sample = b"""
++STATES/PPP_RTS
+*	-1	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      X	 -4052052.9283425	       0.00083634	      0.35716114
+*	-1	2025-01-01 00:00:00.00	        TROP	    	ALIC	   NONE	        2.2833839	       0.00194416	      0.00509827
+*	-1	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      E	        9.426e-04	       0.00012547	      0.00095142
+*	-1	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      N	       -5.585e-04	       0.00014662	     -0.00036064
+-STATES/PPP_RTS
++STATES/PPP_RTS
+*	-1	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      X	 -4052052.9283200	       0.00083500	      0.35700000
+*	-1	2025-01-01 00:00:30.00	        TROP	    	ALIC	   NONE	        2.2833781	       0.00187593	      0.04933566
+*	-1	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      E	        9.426e-04	       0.00012534	      0.00072026
+*	-1	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      N	       -5.585e-04	       0.00014651	     -0.00022148
+-STATES/PPP_RTS
++STATES/PPP_RTS
+*	-1	2025-01-01 00:01:00.00	     REC_POS	    	ALIC	      X	 -4052052.9283100	       0.00083400	      0.35690000
+*	-1	2025-01-01 00:01:00.00	        TROP	    	ALIC	   NONE	        2.2833585	       0.00181406	      0.09590198
+*	-1	2025-01-01 00:01:00.00	   TROP_GRAD	    	ALIC	      E	        9.426e-04	       0.00012521	     -9.7535e-05
+*	-1	2025-01-01 00:01:00.00	   TROP_GRAD	    	ALIC	      N	       -5.585e-04	       0.00014640	     -0.00187035
+-STATES/PPP_RTS
+"""
+
+# Sample TRACE file with troposphere states from STATES/PPP blocks (forward)
+# Forward files have multiple STATES/PPP blocks per epoch (one per filter iteration)
+# Iterations are numbered 0, 1, 2, ... (0=PREDICTED, then Kalman updates)
+# The keep_last_iteration logic should keep only the last iteration for each epoch
+trace_trop_forward_sample = b"""
++STATES/PPP
+*	 0	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      X	 -4052052.9000000	       0.01000000	      0.50000000
+*	 0	2025-01-01 00:00:00.00	        TROP	    	ALIC	   NONE	        2.3000000	       0.30000000	      0.01000000
+*	 0	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      E	        0.0010000	       0.03000000	      0.00100000
+*	 0	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      N	       -0.0005000	       0.03000000	     -0.00050000
+-STATES/PPP
++STATES/PPP
+*	 1	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      X	 -4052052.9200000	       0.00950000	      0.45000000
+*	 1	2025-01-01 00:00:00.00	        TROP	    	ALIC	   NONE	        2.2850000	       0.29500000	      0.00800000
+*	 1	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      E	        0.0005000	       0.02990000	      0.00050000
+*	 1	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      N	       -0.0003000	       0.02990000	     -0.00030000
+-STATES/PPP
++STATES/PPP
+*	 2	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      X	 -4052052.9283425	       0.00900000	      0.40000000
+*	 2	2025-01-01 00:00:00.00	        TROP	    	ALIC	   NONE	        2.2782856	       0.29706170	      0.00652749
+*	 2	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      E	       -8.865e-06	       0.02977625	     -8.8652e-06
+*	 2	2025-01-01 00:00:00.00	   TROP_GRAD	    	ALIC	      N	       -1.979e-04	       0.02984829	     -0.00019789
+-STATES/PPP
++STATES/PPP
+*	 0	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      X	 -4052052.9000000	       0.01000000	      0.50000000
+*	 0	2025-01-01 00:00:30.00	        TROP	    	ALIC	   NONE	        2.2500000	       0.28000000	     -0.02000000
+*	 0	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      E	        0.0003000	       0.02900000	      0.00030000
+*	 0	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      N	       -0.0004000	       0.02950000	     -0.00040000
+-STATES/PPP
++STATES/PPP
+*	 1	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      X	 -4052052.9283200	       0.00900000	      0.40000000
+*	 1	2025-01-01 00:00:30.00	        TROP	    	ALIC	   NONE	        2.2340424	       0.27922550	     -0.04424321
+*	 1	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      E	        2.223e-04	       0.02874815	      0.00023119
+*	 1	2025-01-01 00:00:30.00	   TROP_GRAD	    	ALIC	      N	       -3.371e-04	       0.02939472	     -0.00013916
+-STATES/PPP
+"""
+
+# Empty TRACE file without trop states (has other states but no TROP)
+trace_no_trop = b"""
++STATES/PPP_RTS
+*	-1	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      X	    -4052052.66	       0.00500000	      0.00100000
+*	-1	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      Y	     4212836.00	       0.00500000	     -0.00200000
+*	-1	2025-01-01 00:00:00.00	     REC_POS	    	ALIC	      Z	    -2545104.70	       0.00500000	      0.00150000
+-STATES/PPP_RTS
++STATES/PPP_RTS
+*	-1	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      X	    -4052052.66	       0.00500000	      0.00100000
+*	-1	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      Y	     4212836.00	       0.00500000	     -0.00200000
+*	-1	2025-01-01 00:00:30.00	     REC_POS	    	ALIC	      Z	    -2545104.70	       0.00500000	      0.00150000
+-STATES/PPP_RTS
+"""
