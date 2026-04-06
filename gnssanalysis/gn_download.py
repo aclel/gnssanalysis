@@ -864,22 +864,16 @@ def download_file_from_cddis(
         _session = session
         _owns_session = False
     else:
-        # Get NASA Earthdata credentials (raises ValueError on failure)
-        earthdata_username, earthdata_password = get_earthdata_credentials(username=username, password=password)
-
-        retries = 0
-        while retries <= max_retries:
-            try:
-                earthdata_username, earthdata_password = get_earthdata_credentials(
-                    username=username, password=password
-                )
-            except ValueError as e:
-                logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
-                raise
-            _session = _requests.Session()
-            _session.auth = (earthdata_username, earthdata_password)
-            _owns_session = True
-            break
+        try:
+            earthdata_username, earthdata_password = get_earthdata_credentials(
+                username=username, password=password
+            )
+        except ValueError as e:
+            logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
+            raise
+        _session = _requests.Session()
+        _session.auth = (earthdata_username, earthdata_password)
+        _owns_session = True
 
     try:
         retries = 0
@@ -901,18 +895,18 @@ def download_file_from_cddis(
                     return decompress_file(download_filepath, delete_after_decompression=True)
 
                 return download_filepath
-    except _requests.exceptions.RequestException as e:
-        retries += 1
-        if retries > max_retries:
-            # TODO consider wrapping the RequestException with this, and raising that, rather than logging an error
-            logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
-            if download_filepath.is_file():
-                download_filepath.unlink()
-            raise
-        backoff = _random.uniform(0.0, 2.0 ** retries)
-        _warnings.warn(
-            f"Error downloading {filename}: {e} " f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)"
-        )
+            except _requests.exceptions.RequestException as e:
+                retries += 1
+                if retries > max_retries:
+                    # TODO consider wrapping the RequestException with this, and raising that, rather than logging an error
+                    logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
+                    if download_filepath.is_file():
+                        download_filepath.unlink()
+                    raise
+                backoff = _random.uniform(0.0, 2.0 ** retries)
+                _warnings.warn(
+                    f"Error downloading {filename}: {e} " f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)"
+                )
         _time.sleep(backoff)
     finally:
         if _owns_session:
