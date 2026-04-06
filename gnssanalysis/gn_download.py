@@ -95,27 +95,6 @@ class TransferCallback:
 
 
 
-def get_earthdata_token() -> Optional[str]:
-    """
-    Get a NASA Earthdata Bearer token from the .netrc file.
-    Uses the 'account' field for the urs.earthdata.nasa.gov entry:
-      machine urs.earthdata.nasa.gov login <user> password <pass> account <token>
-
-    Returns the token string, or None if not found.
-    """
-    try:
-        netrc_path = _Path.home() / ".netrc"
-        if netrc_path.exists():
-            netrc_auth = _netrc.netrc()
-            auth_info = netrc_auth.authenticators(EARTHDATA_URL)
-            if auth_info and auth_info[1]:  # auth_info[1] is the 'account' field
-                logging.debug("Using Earthdata token from .netrc account field")
-                return auth_info[1]
-    except Exception as e:
-        logging.debug(f"Error reading .netrc for token: {e}")
-    return None
-
-
 def get_earthdata_credentials(username: str = None, password: str = None) -> Tuple[str, str]:
     """
     Get NASA Earthdata credentials from .netrc file or direct parameters.
@@ -804,7 +783,6 @@ def download_file_from_cddis(
     username: str = None,
     password: str = None,
     note_filetype: Optional[str] = None,
-    session: Optional[_requests.Session] = None,
 ) -> Union[_Path, None]:
     """ Download a single file from the CDDIS HTTPS archive using NASA Earthdata authentication
 
@@ -818,8 +796,6 @@ def download_file_from_cddis(
     :param str note_filetype: How to label the file for STDOUT messages, defaults to None
     :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
     :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
-    :param requests.Session session: Pre-authenticated session to reuse (optional). If provided,
-        username/password are ignored and no new session is created.
     :raises ValueError: If no credentials can be obtained.
     :raises requests.RequestException: If the file cannot be downloaded after retries.
     :return _Path or None: The pathlib.Path of the downloaded file (or decompressed output of it).
@@ -847,30 +823,29 @@ def download_file_from_cddis(
     if download_filepath is None:
         return None  # File exists and user chose not to replace
 
-    # Get or create a session
-    if session is not None:
-        _session = session
-        _owns_session = False
-    else:
-        try:
-            earthdata_username, earthdata_password = get_earthdata_credentials(
-                username=username, password=password
-            )
-        except ValueError as e:
-            logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
-            raise
-        _session = _requests.Session()
-        _session.auth = (earthdata_username, earthdata_password)
-        _owns_session = True
-
+    # Get NASA Earthdata credentials
     try:
-        retries = 0
-        while retries <= max_retries:
-            try:
-                logging.debug(f"Downloading {note_filetype or filename} from {url}")
-                response = _session.get(url, stream=True)
+        earthdata_username, earthdata_password = get_earthdata_credentials(
+            username=username, password=password
+        )
+    except ValueError as e:
+        logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
+        raise
+
+    retries = 0
+    while retries <= max_retries:
+        try:
+            logging.debug(f"Downloading {note_filetype or filename} from {url}")
+            # Use simple NASA Earthdata authentication approach
+            # Third example from: https://urs.earthdata.nasa.gov/documentation/for_users/data_access/python
+            with _requests.Session() as session:
+                session.auth = (earthdata_username, earthdata_password)
+                response = session.get(url, stream=True)
+
+                # Check if request was successful
                 response.raise_for_status()
 
+                # Download the file
                 with open(download_filepath, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=MB):
                         if chunk:
@@ -884,20 +859,17 @@ def download_file_from_cddis(
 
                 return download_filepath
 
-            except _requests.exceptions.RequestException as e:
-                retries += 1
-                if retries > max_retries:
-                    logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
-                    if download_filepath.is_file():
-                        download_filepath.unlink()
-                    raise
-                backoff = _random.uniform(0.0, 2.0 ** retries)
-                logging.warning(f"Error downloading {filename}: {e} "
-                                f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
-                _time.sleep(backoff)
-    finally:
-        if _owns_session:
-            _session.close()
+        except _requests.exceptions.RequestException as e:
+            retries += 1
+            if retries > max_retries:
+                logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
+                if download_filepath.is_file():
+                    download_filepath.unlink()
+                raise
+            backoff = _random.uniform(0.0, 2.0 ** retries)
+            logging.warning(f"Error downloading {filename}: {e} "
+                            f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
+            _time.sleep(backoff)
 
     raise Exception("Unexpected fallthrough in download_file_from_cddis.")
 
