@@ -94,7 +94,6 @@ class TransferCallback:
             _sys.stdout.flush()
 
 
-
 def get_earthdata_token() -> Optional[str]:
     """
     Get a NASA Earthdata Bearer token from the EARTHDATA_TOKEN environment variable.
@@ -110,11 +109,11 @@ def get_earthdata_token() -> Optional[str]:
     return None
 
 
-def get_earthdata_credentials(username: str = None, password: str = None) -> Tuple[str, str]:
+def get_earthdata_credentials(username: Optional[str] = None, password: Optional[str] = None) -> Tuple[str, str]:
     """
-    Get NASA Earthdata credentials from .netrc file or direct parameters.
-    :param str username: Directly provided username (highest priority)
-    :param str password: Directly provided password (highest priority)
+    Get NASA Earthdata credentials from direct parameters, env vars, or .netrc file.
+    :param Optional[str] username: Directly provided username (highest priority)
+    :param Optional[str] password: Directly provided password (highest priority)
     :return Tuple[str, str]: Username and password tuple
     :raises ValueError: If no credentials can be obtained
     """
@@ -122,7 +121,23 @@ def get_earthdata_credentials(username: str = None, password: str = None) -> Tup
     if username and password:
         logging.debug("Using directly provided NASA Earthdata credentials")
         return username, password
-    # Priority 2: Try to read from .netrc file
+
+    # Priority 2: Try to read from env vars
+    logging.debug("Attempting to pick up NASA Earthdata credentials from env vars...")
+    if all(env in _os.environ for env in ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"]):
+
+        env_user = _os.environ["EARTHDATA_USERNAME"]
+        env_pass = _os.environ["EARTHDATA_PASSWORD"]
+
+        if len(env_user) == 0 or len(env_pass) == 0:
+            raise ValueError("NASA Earthdata username or password found in env var appears to be empty")
+
+        logging.debug("NASA Earthdata credentials successfully read from env vars")
+        return _os.environ["EARTHDATA_USERNAME"], _os.environ["EARTHDATA_PASSWORD"]
+    else:
+        logging.debug("Env vars EARTHDATA_USERNAME or EARTHDATA_PASSWORD were not set. Trying netrc...")
+
+    # Priority 3: Try to read from .netrc file
     try:
         netrc_path = _Path.home() / '.netrc'
         if netrc_path.exists():
@@ -137,8 +152,11 @@ def get_earthdata_credentials(username: str = None, password: str = None) -> Tup
     except Exception as e:
         logging.debug(f"Error reading .netrc: {e}")
     # No credentials available
-    raise ValueError("No NASA Earthdata credentials available. Provide username/password directly "
-                     f"or set up .netrc file with entry for '{EARTHDATA_URL}'.")
+    raise ValueError(
+        "No NASA Earthdata credentials available. Provide username/password directly, "
+        "set env vars EARTHDATA_USERNAME and EARTHDATA_PASSWORD, "
+        f"or set up .netrc file with entry for '{EARTHDATA_URL}'."
+    )
 
 
 def upload_with_chunksize_and_meta(
@@ -789,18 +807,18 @@ def ftp_tls(url: str, **kwargs) -> Generator[Any, Any, Any]:
 
 def download_file_from_cddis(
     filename: str,
-    ftp_folder: Optional[str] = None,     # deprecated
-    url_folder: Optional[str] = None,     # preferred
+    ftp_folder: Optional[str] = None,  # deprecated
+    url_folder: Optional[str] = None,  # preferred
     output_folder: _Path = _Path("."),
     max_retries: int = 3,
     decompress: bool = True,
     if_file_present: str = "prompt_user",
-    username: str = None,
-    password: str = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
     note_filetype: Optional[str] = None,
     session: Optional[_requests.Session] = None,
 ) -> Union[_Path, None]:
-    """ Download a single file from the CDDIS HTTPS archive using NASA Earthdata authentication
+    """Download a single file from the CDDIS HTTPS archive using NASA Earthdata authentication
 
     :param str filename: Name of the file to download
     :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead
@@ -810,8 +828,8 @@ def download_file_from_cddis(
     :param bool decompress: If true, decompresses files on download, defaults to True
     :param str if_file_present: What to do if file already present: "replace", "dont_replace", defaults to "prompt_user"
     :param str note_filetype: How to label the file for STDOUT messages, defaults to None
-    :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
-    :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
+    :param Optional[str] username: NASA Earthdata username (optional, will try .netrc if not provided).
+    :param Optional[str] password: NASA Earthdata password (optional, will try .netrc if not provided).
     :param requests.Session session: Pre-authenticated session to reuse (optional). If provided,
         username/password are ignored and no new session is created.
     :raises ValueError: If no credentials can be obtained.
@@ -846,16 +864,22 @@ def download_file_from_cddis(
         _session = session
         _owns_session = False
     else:
-        try:
-            earthdata_username, earthdata_password = get_earthdata_credentials(
-                username=username, password=password
-            )
-        except ValueError as e:
-            logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
-            raise
-        _session = _requests.Session()
-        _session.auth = (earthdata_username, earthdata_password)
-        _owns_session = True
+        # Get NASA Earthdata credentials (raises ValueError on failure)
+        earthdata_username, earthdata_password = get_earthdata_credentials(username=username, password=password)
+
+        retries = 0
+        while retries <= max_retries:
+            try:
+                earthdata_username, earthdata_password = get_earthdata_credentials(
+                    username=username, password=password
+                )
+            except ValueError as e:
+                logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
+                raise
+            _session = _requests.Session()
+            _session.auth = (earthdata_username, earthdata_password)
+            _owns_session = True
+            break
 
     try:
         retries = 0
@@ -877,18 +901,19 @@ def download_file_from_cddis(
                     return decompress_file(download_filepath, delete_after_decompression=True)
 
                 return download_filepath
-
-            except _requests.exceptions.RequestException as e:
-                retries += 1
-                if retries > max_retries:
-                    logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
-                    if download_filepath.is_file():
-                        download_filepath.unlink()
-                    raise
-                backoff = _random.uniform(0.0, 2.0 ** retries)
-                logging.warning(f"Error downloading {filename}: {e} "
-                                f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)")
-                _time.sleep(backoff)
+    except _requests.exceptions.RequestException as e:
+        retries += 1
+        if retries > max_retries:
+            # TODO consider wrapping the RequestException with this, and raising that, rather than logging an error
+            logging.error(f"Failed to download {filename} after {max_retries} retries: {e}")
+            if download_filepath.is_file():
+                download_filepath.unlink()
+            raise
+        backoff = _random.uniform(0.0, 2.0 ** retries)
+        _warnings.warn(
+            f"Error downloading {filename}: {e} " f"(retry {retries}/{max_retries}, backoff {backoff:.1f}s)"
+        )
+        _time.sleep(backoff)
     finally:
         if _owns_session:
             _session.close()
@@ -898,11 +923,11 @@ def download_file_from_cddis(
 
 def download_multiple_files_from_cddis(
     files: List[str],
-    ftp_folder: Optional[str] = None,     # deprecated
-    url_folder: Optional[str] = None,     # preferred
+    ftp_folder: Optional[str] = None,  # deprecated
+    url_folder: Optional[str] = None,  # preferred
     output_folder: _Path = _Path("."),
-    username: str = None,
-    password: str = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> None:
     """
     Download multiple files from the CDDIS HTTPS archive concurrently, using a thread pool.
@@ -911,8 +936,8 @@ def download_multiple_files_from_cddis(
     :param str ftp_folder: (Deprecated) Legacy folder path on the CDDIS FTP server. Use url_folder instead.
     :param str url_folder: Folder path (relative to CDDIS HTTPS archive root).
     :param _Path output_folder: Local folder to store the output files.
-    :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
-    :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
+    :param Optional[str] username: NASA Earthdata username (optional, will try .netrc if not provided).
+    :param Optional[str] password: NASA Earthdata password (optional, will try .netrc if not provided).
     :raises ValueError: If both ftp_folder and url_folder are provided.
     :return None: Runs downloads in parallel, does not return values. Each file is handled independently.
     """
@@ -966,8 +991,8 @@ def download_product_from_cddis(
     campaign: Optional[Literal["repro1", "repro2", "repro3"]] = None,
     timespan: _datetime.timedelta = _datetime.timedelta(days=2),
     if_file_present: str = "prompt_user",
-    username: str = None,
-    password: str = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> List[_Path]:
     """Download the file/s from CDDIS based on start and end epoch, to the download directory (download_dir)
 
@@ -985,8 +1010,8 @@ def download_product_from_cddis(
     :param Literal["repro1", "repro2", "repro3"] campaign: IGS reprocessing campaign to download from (repro3 valid for GPS weeks 729-2237), defaults to None (standard products)
     :param _datetime.timedelta timespan: Timespan of the file/s to download, defaults to _datetime.timedelta(days=2)
     :param str if_file_present: What to do if file already present: "replace", "dont_replace", defaults to "prompt_user"
-    :param str username: NASA Earthdata username (optional, will try .netrc if not provided).
-    :param str password: NASA Earthdata password (optional, will try .netrc if not provided).
+    :param Optional[str] username: NASA Earthdata username (optional, will try .netrc if not provided).
+    :param Optional[str] password: NASA Earthdata password (optional, will try .netrc if not provided).
     :raises FileNotFoundError: Raise error if the specified file cannot be found on CDDIS
     :raises ValueError: If repro3 campaign requested for GPS weeks outside valid range (729-2237)
     :raises Exception: If a file fails to download after all retries.
