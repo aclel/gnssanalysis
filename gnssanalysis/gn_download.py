@@ -97,22 +97,16 @@ class TransferCallback:
 
 def get_earthdata_token() -> Optional[str]:
     """
-    Get a NASA Earthdata Bearer token from the .netrc file.
-    Uses the 'account' field for the urs.earthdata.nasa.gov entry:
-      machine urs.earthdata.nasa.gov login <user> password <pass> account <token>
+    Get a NASA Earthdata Bearer token from the EARTHDATA_TOKEN environment variable.
+    This aligns with the earthaccess package convention.
 
-    Returns the token string, or None if not found.
+    Returns the token string, or None if not set.
     """
-    try:
-        netrc_path = _Path.home() / ".netrc"
-        if netrc_path.exists():
-            netrc_auth = _netrc.netrc()
-            auth_info = netrc_auth.authenticators(EARTHDATA_URL)
-            if auth_info and auth_info[1]:  # auth_info[1] is the 'account' field
-                logging.debug("Using Earthdata token from .netrc account field")
-                return auth_info[1]
-    except Exception as e:
-        logging.debug(f"Error reading .netrc for token: {e}")
+    import os as _os
+    token = _os.environ.get("EARTHDATA_TOKEN")
+    if token:
+        logging.debug("Using Earthdata token from EARTHDATA_TOKEN environment variable")
+        return token
     return None
 
 
