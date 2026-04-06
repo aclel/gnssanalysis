@@ -841,23 +841,23 @@ def download_file_from_cddis(
     if download_filepath is None:
         return None  # File exists and user chose not to replace
 
-    try:
-        earthdata_username, earthdata_password = get_earthdata_credentials(
-            username=username, password=password
-        )
-    except ValueError as e:
-        logging.error(f"Failed to obtain NASA Earthdata credentials: {e}")
-        raise
+    # Get NASA Earthdata credentials (raises ValueError on failure)
+    earthdata_username, earthdata_password = get_earthdata_credentials(username=username, password=password)
 
     retries = 0
     while retries <= max_retries:
         try:
             logging.debug(f"Downloading {note_filetype or filename} from {url}")
-            with _requests.Session() as _session:
-                _session.auth = (earthdata_username, earthdata_password)
-                response = _session.get(url, stream=True)
+            # Use simple NASA Earthdata authentication approach
+            # Third example from: https://urs.earthdata.nasa.gov/documentation/for_users/data_access/python
+            with _requests.Session() as session:
+                session.auth = (earthdata_username, earthdata_password)
+                response = session.get(url, stream=True)
+
+                # Check if request was successful
                 response.raise_for_status()
 
+                # Download the file
                 with open(download_filepath, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=MB):
                         if chunk:
