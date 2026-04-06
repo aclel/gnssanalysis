@@ -94,21 +94,6 @@ class TransferCallback:
             _sys.stdout.flush()
 
 
-def get_earthdata_token() -> Optional[str]:
-    """
-    Get a NASA Earthdata Bearer token from the EARTHDATA_TOKEN environment variable.
-    This aligns with the earthaccess package convention.
-
-    Returns the token string, or None if not set.
-    """
-    import os as _os
-    token = _os.environ.get("EARTHDATA_TOKEN")
-    if token:
-        logging.debug("Using Earthdata token from EARTHDATA_TOKEN environment variable")
-        return token
-    return None
-
-
 def get_earthdata_credentials(username: Optional[str] = None, password: Optional[str] = None) -> Tuple[str, str]:
     """
     Get NASA Earthdata credentials from direct parameters, env vars, or .netrc file.
